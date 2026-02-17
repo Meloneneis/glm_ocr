@@ -1,5 +1,11 @@
 # GLM-OCR single-image / single-PDF inference (Hugging Face Transformers)
 # Python 3.11 recommended; use: conda create -n glm_ocr python=3.11 && conda activate glm_ocr && pip install -r requirements.txt
+#
+# Flash Attention 2 (optional, for faster inference). Normal pip install:
+#   PyTorch 2.10 + CUDA 12.8 + Python 3.11: use prebuilt wheel (no build from source):
+#   pip install https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.6.3+cu128torch2.10-cp311-cp311-linux_x86_64.whl
+#   Other combos: https://github.com/mjun0812/flash-attention-prebuild-wheels/releases
+#   Without flash-attn: run the PDF script with --no-flash-attn.
 
 torch==2.10.0
 torchvision==0.25.0
@@ -7,3 +13,5 @@ transformers==5.2.0
 accelerate==1.12.0
 tqdm==4.67.3
 pypdfium2==5.4.0
+kernels  # for Flash Attention (kernels-community); install with: pip install -U kernels
+# flash-attn  # optional; install via the wheel URL above for torch 2.10 + cu128 + cp311

@@ -94,6 +94,11 @@ def main():
         metavar="N",
         help="Max new tokens per page (default 1024; increase if dense pages get cut off)",
     )
+    parser.add_argument(
+        "--no-flash-attn",
+        action="store_true",
+        help="Disable Flash Attention 2 (use default attention; try this if flash-attn fails)",
+    )
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parent
@@ -113,11 +118,21 @@ def main():
 
     print("Loading processor and model...")
     processor = AutoProcessor.from_pretrained(model_id, use_fast=False)
-    model = GlmOcrForConditionalGeneration.from_pretrained(
-        model_id,
+    model_kwargs = dict(
         torch_dtype=torch.bfloat16,
         device_map="auto",
     )
+    if not args.no_flash_attn:
+        model_kwargs["attn_implementation"] = "kernels-community/flash-attn2"
+        print("Using Flash Attention 2 (kernels-community/flash-attn2).")
+    try:
+        model = GlmOcrForConditionalGeneration.from_pretrained(model_id, **model_kwargs)
+    except Exception as e:
+        if not args.no_flash_attn and "flash" in str(e).lower():
+            print(f"Flash Attention load failed: {e}", file=sys.stderr)
+            print("Retry with --no-flash-attn to use default attention.", file=sys.stderr)
+            sys.exit(1)
+        raise
 
     print(f"Converting PDF to images (scale={args.scale}): {pdf_path}")
     images = pdf_to_images(pdf_path, scale=args.scale)
