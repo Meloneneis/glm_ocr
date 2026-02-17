@@ -1,0 +1,9 @@
+# GLM-OCR single-image / single-PDF inference (Hugging Face Transformers)
+# Python 3.11 recommended; use: conda create -n glm_ocr python=3.11 && conda activate glm_ocr && pip install -r requirements.txt
+
+torch==2.10.0
+torchvision==0.25.0
+transformers==5.2.0
+accelerate==1.12.0
+tqdm==4.67.3
+pypdfium2==5.4.0
