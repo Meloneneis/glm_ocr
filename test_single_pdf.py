@@ -19,7 +19,10 @@ import torch
 from tqdm import tqdm
 from transformers import AutoProcessor, GlmOcrForConditionalGeneration
 
+from generation_with_probs import run_ocr_batch_with_probs
+
 model_id = "zai-org/GLM-OCR"
+PROMPT = "Text Recognition:"
 
 
 def pdf_to_images(pdf_path: Path, scale: float = 2.0) -> list:
@@ -37,8 +40,17 @@ def pdf_to_images(pdf_path: Path, scale: float = 2.0) -> list:
     return images
 
 
-def run_ocr_on_image(processor, model, image, prompt: str = "Text Recognition:", max_new_tokens: int = 512, return_n_tokens: bool = False):
-    """Run GLM-OCR on a single PIL Image; return decoded text (and optionally num generated tokens)."""
+def run_ocr_on_image(processor, model, image, prompt: str = "Text Recognition:", max_new_tokens: int = 512, return_n_tokens: bool = False, return_probs: bool = False):
+    """Run GLM-OCR on a single PIL Image; return decoded text and optionally n_tokens and/or token probs."""
+    if return_probs:
+        texts, token_probs_per_image = run_ocr_batch_with_probs(
+            processor, model, [image], prompt=prompt, max_new_tokens=max_new_tokens
+        )
+        text = texts[0] if texts else ""
+        probs = token_probs_per_image[0] if token_probs_per_image else []
+        if return_n_tokens:
+            return (text, len(probs), probs)
+        return (text, probs)
     messages = [
         {
             "role": "user",
@@ -86,6 +98,11 @@ def main():
         "--show-tokens",
         action="store_true",
         help="Print generated token count per page (to verify time vs. output length)",
+    )
+    parser.add_argument(
+        "--show-probs",
+        action="store_true",
+        help="Compute and print token probabilities per page (avg, min; implies --show-tokens)",
     )
     parser.add_argument(
         "--max-tokens",
@@ -139,17 +156,24 @@ def main():
     n_pages = len(images)
 
     page_times: list[float] = []
-    page_texts: list[str] = []
+    page_texts: list[tuple] = []  # (text, n_tokens or None, probs or None)
 
     max_tokens = args.max_tokens
+    use_probs = args.show_probs
     for i, image in enumerate(tqdm(images, desc="OCR pages", unit="page")):
         t0 = time.perf_counter()
-        if args.show_tokens:
+        if use_probs:
+            text, n_tokens, probs = run_ocr_on_image(
+                processor, model, image, prompt=PROMPT, max_new_tokens=max_tokens,
+                return_n_tokens=True, return_probs=True,
+            )
+            page_texts.append((text, n_tokens, probs))
+        elif args.show_tokens:
             text, n_tokens = run_ocr_on_image(processor, model, image, max_new_tokens=max_tokens, return_n_tokens=True)
-            page_texts.append((text, n_tokens))
+            page_texts.append((text, n_tokens, None))
         else:
             text = run_ocr_on_image(processor, model, image, max_new_tokens=max_tokens)
-            page_texts.append((text, None))
+            page_texts.append((text, None, None))
         elapsed = time.perf_counter() - t0
         page_times.append(elapsed)
 
@@ -158,21 +182,55 @@ def main():
     print("TIMING (seconds per page)")
     print("=" * 60)
     for i, t in enumerate(page_times, start=1):
-        tok_info = f"  ({page_texts[i-1][1]} tok)" if page_texts[i-1][1] is not None else ""
+        entry = page_texts[i - 1]
+        tok_info = f"  ({entry[1]} tok)" if entry[1] is not None else ""
+        if entry[2] is not None and entry[2]:
+            probs = [p for _, p in entry[2]]
+            avg_p = sum(probs) / len(probs)
+            min_p = min(probs)
+            tok_info += f"  avg_prob={avg_p:.4f} min_prob={min_p:.4f}"
         print(f"  Page {i}: {t:.2f}s{tok_info}")
     total_time = sum(page_times)
     print(f"  Total: {total_time:.2f}s  (avg {total_time / n_pages:.2f}s/page)")
-    if args.show_tokens and any(p[1] is not None for p in page_texts):
+    if (args.show_tokens or use_probs) and any(p[1] is not None for p in page_texts):
         total_tok = sum(p[1] for p in page_texts if p[1] is not None)
         print(f"  Total generated tokens: {total_tok}  (avg {total_tok / n_pages:.0f}/page)")
+    if use_probs and any(p[2] for p in page_texts if p[2]):
+        # (prob, token, page_idx, pos_in_page) for context
+        candidates = [
+            (p, tok, page_idx, pos)
+            for page_idx, entry in enumerate(page_texts)
+            if entry[2]
+            for pos, (tok, p) in enumerate(entry[2])
+        ]
+        if candidates:
+            all_probs = [c[0] for c in candidates]
+            print(f"  Token probs: global avg={sum(all_probs)/len(all_probs):.4f} min={min(all_probs):.4f}")
+            worst = sorted(candidates, key=lambda x: x[0])[:50]
+            _bold_red, _reset = "\033[1;31m", "\033[0m"
+            _max_ctx = 50
+            print("  Worst 50 tokens by probability (context with token in bold red):")
+            for p, tok, page_idx, pos in worst:
+                pl = page_texts[page_idx][2]
+                left = "".join(t for t, _ in pl[max(0, pos - 10) : pos]).replace("\n", " ")
+                right = "".join(t for t, _ in pl[pos + 1 : pos + 11]).replace("\n", " ")
+                token_flat = tok.replace("\n", " ")
+                if len(left) > _max_ctx:
+                    left = "..." + left[-(_max_ctx - 3) :]
+                if len(right) > _max_ctx:
+                    right = right[:_max_ctx - 3] + "..."
+                line = left + _bold_red + token_flat + _reset + right
+                print(f"    Page {page_idx + 1}  {p:.4f}  {line}")
     print()
 
     print("=" * 60)
     print("TEXT (per page)")
     print("=" * 60)
-    for i, (text, _) in enumerate(page_texts, start=1):
+    for i, entry in enumerate(page_texts, start=1):
+        text = entry[0]
         print(f"\n--- Page {i} ---")
-        print(text)
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            print(f"  {line_no:4d}  {line}")
     print()
 
 

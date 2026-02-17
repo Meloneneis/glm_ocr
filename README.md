@@ -10,9 +10,10 @@ This project runs [GLM-OCR](https://huggingface.co/zai-org/GLM-OCR) (Z.ai’s mu
 
 | Item | Description |
 |------|-------------|
-| **`test_single_pdf.py`** | Run OCR on one PDF: render all pages to images, process **one page at a time**, print timing and text per page. |
-| **`test_batch_pdf.py`** | Same PDF workflow but process pages **in batches** (e.g. 2 pages per forward pass) for better GPU use. |
+| **`test_single_pdf.py`** | Run OCR on one PDF: render all pages to images, process **one page at a time**, print timing and text per page. Supports `--show-probs` for token probabilities. |
+| **`test_batch_pdf.py`** | Same PDF workflow but process pages **in batches** (e.g. 4 or 8 pages per forward pass) for better GPU use. Supports `--show-probs` for token probabilities. |
 | **`test_single_image.py`** | Run OCR on a **single image** (no PDF). |
+| **`generation_with_probs.py`** | Helpers for generation with token probabilities: `run_ocr_batch_with_probs()` returns cleaned text plus an ordered list of `(token_str, probability)` per page (special tokens excluded). Used by both PDF scripts when `--show-probs` is set. |
 | **`requirements.txt`** | Python dependencies; includes notes for optional Flash Attention and `kernels`. |
 | **`data/`** | Directory for PDFs (e.g. drop files here; scripts can pick the first PDF under `data/` if no path is given). |
 
@@ -62,12 +63,13 @@ python test_single_pdf.py
 # Specific PDF
 python test_single_pdf.py path/to/file.pdf
 
-# Options: scale, max tokens, token stats, disable Flash Attention
+# Options: scale, max tokens, token stats, token probabilities, disable Flash Attention
 python test_single_pdf.py path/to/file.pdf --scale 2.0 --max-tokens 1024 --show-tokens
+python test_single_pdf.py path/to/file.pdf --show-probs
 python test_single_pdf.py path/to/file.pdf --no-flash-attn
 ```
 
-- **Output:** Timing per page, total time, and extracted text per page. With `--show-tokens`, generated token counts per page and total.
+- **Output:** Timing per page, total time, and extracted text per page (with line numbers). With `--show-tokens`, generated token counts per page and total. With `--show-probs`, per-page and global token-probability stats plus the 50 lowest-probability tokens with surrounding context (token in bold red).
 
 ### Batch PDF (multiple pages per forward pass)
 
@@ -78,11 +80,12 @@ python test_batch_pdf.py path/to/file.pdf
 # Larger batches
 python test_batch_pdf.py path/to/file.pdf --batch-size 4
 
-# Token stats
+# Token stats or token probabilities
 python test_batch_pdf.py path/to/file.pdf --show-tokens
+python test_batch_pdf.py path/to/file.pdf --show-probs --batch-size 4
 ```
 
-- **Output:** Timing summary (pages, batch size, batches, total time, avg sec/page, pages/sec) and text per page. With `--show-tokens`, token counts per batch and total/avg per page.
+- **Output:** Timing summary (pages, batch size, batches, total time, avg sec/page, pages/sec) and text per page (with line numbers). With `--show-tokens`, token counts per batch and total/avg per page. With `--show-probs`, per-batch and global token-probability stats plus the 50 lowest-probability tokens with 10-token context (token in bold red).
 
 ### Single image
 
@@ -98,10 +101,11 @@ python test_single_image.py
 | Option | Scripts | Default | Description |
 |--------|---------|--------|-------------|
 | `--scale` | single, batch | 2.0 | PDF render scale (pixels per point; 2 ≈ 144 DPI). |
-| `--max-tokens` | single, batch | 1024 | Max new tokens per page (increase if long pages are cut off). |
+| `--max-tokens` | single, batch | 1024 / 2048 | Max new tokens per page (single: 1024; batch: 2048). |
 | `--show-tokens` | single, batch | off | Print generated token counts (per page or per batch + total). |
+| `--show-probs` | single, batch | off | Compute token probabilities (softmax over logits), show global avg/min, and worst 50 tokens with context (bold red in terminal). |
 | `--no-flash-attn` | single, batch | off | Disable Flash Attention 2 (use default attention). |
-| `--batch-size` | batch only | 2 | Number of pages per batch in `test_batch_pdf.py`. |
+| `--batch-size` | batch only | 8 | Number of pages per batch in `test_batch_pdf.py`. |
 
 ---
 
@@ -111,7 +115,8 @@ python test_single_image.py
 2. **Model:** **zai-org/GLM-OCR** is loaded via `AutoProcessor` and `GlmOcrForConditionalGeneration` (bfloat16, `device_map="auto"`). If available and not disabled, Flash Attention 2 is used (`attn_implementation="kernels-community/flash-attn2"`).
 3. **Single-page mode:** For each page image, a chat message (image + prompt `"Text Recognition:"`) is built, passed through the processor, then the model generates text (up to `--max-tokens`). Output is decoded and the prompt/artifacts are stripped.
 4. **Batch mode:** Pages are processed in chunks of `--batch-size`. Each chunk is sent as a batch of messages with `padding=True`; the model returns one sequence per page; `batch_decode` and the same cleanup yield one text per page in order.
-5. **Timing:** Wall-clock time is recorded (per page in single-PDF, per batch in batch-PDF). Avg seconds per page is `total_time / n_pages`; batch size is already reflected in that ratio.
+5. **Token probabilities (`--show-probs`):** When enabled, the scripts call `run_ocr_batch_with_probs()` from **generation_with_probs.py**, which runs `model.generate(..., output_scores=True)`. Logits per generated token are turned into probabilities via softmax; the probability of the chosen token is recorded. Special tokens (e.g. end-of-text) are excluded. Each page gets an ordered list of `(token_str, probability)` pairs. The scripts then print global avg/min, the 50 tokens with lowest probability with 10 tokens of context left and right (target token in bold red), and the full OCR text with line numbers (1-based).
+6. **Timing:** Wall-clock time is recorded (per page in single-PDF, per batch in batch-PDF). Avg seconds per page is `total_time / n_pages`; batch size is already reflected in that ratio.
 
 ---
 
