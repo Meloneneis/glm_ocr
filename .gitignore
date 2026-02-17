@@ -11,5 +11,8 @@ __pycache__/
 # Data (large PDFs – keep locally only)
 data/
 
+# Finetuning generated output (images, splits, labels)
+finetuning/output/
+
 # OS
 .DS_Store
