@@ -21,6 +21,15 @@ The model does **not** accept PDF bytes directly; it expects **images** (`pixel_
 
 **Project structure:** Shared code lives in `src/`; exploratory scripts in `scripts/`. The `finetuning/` and `inference/` trees are set up for the fine-tune-then-inference pipeline (data prep → labels → train → mass inference). Empty directories are kept in Git via `.gitkeep` files so the folder layout is preserved when cloning.
 
+**Finetuning subfolders:**
+
+| Folder | Purpose |
+|--------|--------|
+| **`finetuning/data_prep/`** | Scripts to sample PDFs from a data source, render pages to images, and write them (plus a manifest) into `output/`. |
+| **`finetuning/labels/`** | Scripts to produce or attach gold text per image (e.g. LLM-generated or manual labels), written into the manifest or sidecar files in `output/`. |
+| **`finetuning/train/`** | Scripts and config to load (image, label) pairs from `output/` and run fine-tuning of GLM-OCR. |
+| **`finetuning/output/`** | Generated data only: rendered images, manifest, and labels produced by the steps above; consumed by `train/`. Typically gitignored. |
+
 ---
 
 ## Setup
