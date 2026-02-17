@@ -9,12 +9,15 @@ import sys
 import time
 from pathlib import Path
 
+_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_ROOT))
+
 import pypdfium2 as pdfium
 import torch
 from tqdm import tqdm
 from transformers import AutoProcessor, GlmOcrForConditionalGeneration
 
-from generation_with_probs import run_ocr_batch_with_probs
+from src.generation_with_probs import run_ocr_batch_with_probs
 
 model_id = "zai-org/GLM-OCR"
 PROMPT = "Text Recognition:"
@@ -133,7 +136,7 @@ def main():
     )
     args = parser.parse_args()
 
-    project_root = Path(__file__).resolve().parent
+    project_root = _ROOT
     data_dir = project_root / "data"
     if args.pdf is None:
         pdfs = list(data_dir.rglob("*.pdf"))
