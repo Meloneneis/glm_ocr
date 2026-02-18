@@ -72,9 +72,9 @@ def main():
     parser.add_argument("--test-size", type=int, default=99999)
     # Defaults aligned with Unsloth DeepSeek-OCR 2 / DeepSeek-OCR (3B) notebook.
     parser.add_argument("--epochs", type=int, default=3, help="Number of training epochs (notebook uses max_steps=60 for quick run).")
-    parser.add_argument("--batch-size", type=int, default=8, help="Per-device batch size (notebook: 2).")
+    parser.add_argument("--batch-size", type=int, default=16, help="Per-device batch size (notebook: 2).")
     parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate (notebook: 2e-4).")
-    parser.add_argument("--max-length", type=int, default=4096)
+    parser.add_argument("--max-length", type=int, default=8192)
     parser.add_argument("--save-dir", type=Path, default=None)
     parser.add_argument("--load-in-4bit", action="store_true", help="Load model in 4bit to reduce VRAM.")
     parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank (notebook: 16).")
@@ -85,7 +85,7 @@ def main():
     parser.add_argument("--weight-decay", type=float, default=0.001, help="Weight decay (notebook: 0.001).")
     parser.add_argument("--seed", type=int, default=3407, help="Random seed (notebook: 3407).")
     parser.add_argument("--eval-steps", type=int, default=None, help="Evaluate every N steps. If not set, evaluate once per epoch.")
-    parser.add_argument("--eval-batch-size", type=int, default=2, help="Per-device batch size for evaluation (default 1 to avoid OOM; set to match --batch-size if you have enough VRAM).")
+    parser.add_argument("--eval-batch-size", type=int, default=8, help="Per-device batch size for evaluation (default 1 to avoid OOM; set to match --batch-size if you have enough VRAM).")
     args = parser.parse_args()
 
     train_txt = args.output_dir / "train.txt"
@@ -201,6 +201,62 @@ def main():
                 torch.cuda.empty_cache()
             return control
 
+    class SampleGenerationCallback(TrainerCallback):
+        """After each evaluation, print one sample: model generation vs label (decode with skip_special_tokens)."""
+
+        def __init__(self, processor, output_dir: Path, test_list: list, max_new_tokens: int = 512):
+            self.processor = processor
+            self.output_dir = output_dir
+            self.sample = test_list[0] if test_list else None
+            self.max_new_tokens = max_new_tokens
+
+        def on_evaluate(self, args, state, control, model=None, **kwargs):
+            if model is None or self.sample is None:
+                return control
+            name, label = self.sample
+            image = Image.open(self.output_dir / name).convert("RGB")
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": image},
+                        {"type": "text", "text": PROMPT},
+                    ],
+                },
+            ]
+            inputs = self.processor.apply_chat_template(
+                messages,
+                tokenize=True,
+                add_generation_prompt=True,
+                return_dict=True,
+                return_tensors="pt",
+            )
+            if hasattr(inputs, "to"):
+                inputs = inputs.to(model.device)
+            else:
+                inputs = {k: v.to(model.device) if hasattr(v, "to") else v for k, v in inputs.items()}
+            model.eval()
+            with torch.no_grad():
+                out = model.generate(**inputs, max_new_tokens=self.max_new_tokens)
+            # Decode with skip_special_tokens=True. GLM-OCR special tokens include
+            # <|image|>, <think>, </think>; strip any leftover occurrences for display.
+            generated = self.processor.decode(out[0], skip_special_tokens=True)
+            if PROMPT in generated:
+                generated = generated.split(PROMPT)[-1]
+            generated = generated.replace("<think>", "").replace("</think>", "").replace("<|image|>", "").strip()
+            step = state.global_step if state else 0
+            print("\n" + "=" * 60)
+            print(f"Sample generation vs label (step {step})")
+            print("=" * 60)
+            print("Label:     ", (label[:500] + "..." if len(label) > 500 else label) or "(empty)")
+            print("Generated: ", (generated[:500] + "..." if len(generated) > 500 else generated) or "(empty)")
+            print("=" * 60 + "\n")
+            return control
+
+    callbacks = [
+        ClearCacheEvalCallback(),
+        SampleGenerationCallback(processor, args.output_dir, test_list, max_new_tokens=512),
+    ]
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
@@ -208,8 +264,11 @@ def main():
         train_dataset=train_data,
         eval_dataset=eval_data,
         data_collator=data_collator,
-        callbacks=[ClearCacheEvalCallback()],
+        callbacks=callbacks,
     )
+    # Evaluation before training (baseline)
+    print("Running evaluation before training (baseline)...")
+    trainer.evaluate()
     trainer.train()
     trainer.save_model(str(save_dir))
     processor.save_pretrained(save_dir)

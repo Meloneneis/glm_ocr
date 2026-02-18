@@ -188,9 +188,11 @@ def run_ocr_batch_with_probs(
     ]
 
     decoded = processor.batch_decode(sequences, skip_special_tokens=True)
-    if prompt in decoded[0]:
-        texts = [s.split(prompt)[-1].replace("<|image|>", "").strip() or "" for s in decoded]
-    else:
-        texts = [s.replace("<|image|>", "").strip() or "" for s in decoded]
+    # TokenizersBackend does not strip <think>/</think>/<|image|> despite skip_special_tokens=True; strip in post.
+    def _clean(s: str) -> str:
+        if prompt in s:
+            s = s.split(prompt)[-1]
+        return s.replace("<think>", "").replace("</think>", "").replace("<|image|>", "").strip() or ""
+    texts = [_clean(s) for s in decoded]
 
     return texts, token_probs_ordered

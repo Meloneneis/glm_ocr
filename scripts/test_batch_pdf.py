@@ -40,9 +40,13 @@ def pdf_to_images(pdf_path: Path, scale: float = 2.0) -> list:
 
 
 def _clean_decoded(text: str) -> str:
+    """Drop prompt prefix and strip GLM-OCR special tokens that may remain after decode.
+    processor.batch_decode(skip_special_tokens=True) does not remove <think>/</think>/<|image|>
+    with this tokenizer (TokenizersBackend), so we strip them in post-processing."""
     if PROMPT in text:
         text = text.split(PROMPT)[-1]
-    return text.replace("<|image|>", "").strip() or ""
+    text = text.replace("<think>", "").replace("</think>", "").replace("<|image|>", "")
+    return text.strip() or ""
 
 
 def run_ocr_batch(processor, model, images: list, max_new_tokens: int = 1024, return_batch_tokens: bool = False, return_probs: bool = False):
