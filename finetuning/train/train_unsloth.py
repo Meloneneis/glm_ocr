@@ -85,7 +85,7 @@ def main():
     parser.add_argument("--weight-decay", type=float, default=0.001, help="Weight decay (notebook: 0.001).")
     parser.add_argument("--seed", type=int, default=3407, help="Random seed (notebook: 3407).")
     parser.add_argument("--eval-steps", type=int, default=None, help="Evaluate every N steps. If not set, evaluate once per epoch.")
-    parser.add_argument("--eval-batch-size", type=int, default=4, help="Per-device batch size for evaluation (default 1 to avoid OOM; set to match --batch-size if you have enough VRAM).")
+    parser.add_argument("--eval-batch-size", type=int, default=2, help="Per-device batch size for evaluation (default 1 to avoid OOM; set to match --batch-size if you have enough VRAM).")
     args = parser.parse_args()
 
     train_txt = args.output_dir / "train.txt"
