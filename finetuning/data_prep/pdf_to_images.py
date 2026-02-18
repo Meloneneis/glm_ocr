@@ -48,7 +48,7 @@ def main():
     parser.add_argument(
         "--scale-factor",
         type=float,
-        default=1.5,
+        default=2.0,
         metavar="S",
         help="PDF render scale in pixels per point (default 2.0 ≈ 144 DPI).",
     )
@@ -62,13 +62,13 @@ def main():
     parser.add_argument(
         "--data-dir",
         type=Path,
-        default=_PROJECT_ROOT / "data/21Jhd",
+        default=_PROJECT_ROOT / "data/20Jhd",
         help="Directory to search for PDFs (default: project data/).",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=_PROJECT_ROOT / "finetuning" / "output",
+        default=_PROJECT_ROOT / "finetuning" / "output_20Jhd",
         help="Directory to write rendered images (default: finetuning/output/).",
     )
     args = parser.parse_args()

@@ -19,7 +19,8 @@ from transformers import AutoProcessor, GlmOcrForConditionalGeneration
 
 from src.generation_with_probs import run_ocr_batch_with_probs
 
-model_id = "zai-org/GLM-OCR"
+base_model_id = "unsloth/GLM-OCR"
+adapter_id = "meloneneneis/glm_ocr_21jhd"
 PROMPT = "Text Recognition:"
 
 
@@ -96,7 +97,7 @@ def main():
         "pdf",
         type=Path,
         nargs="?",
-        default=None,
+        default="data/21Jhd/BGH_Strafsenat-5_NA_2013-08-22_5_StR_356_13_NA_NA_0.pdf",
         help="Path to PDF (default: first PDF under data/)",
     )
     parser.add_argument(
@@ -109,7 +110,7 @@ def main():
     parser.add_argument(
         "--scale",
         type=float,
-        default=2.0,
+        default=1.5,
         help="PDF render scale (default 2.0 ≈ 144 DPI)",
     )
     parser.add_argument(
@@ -156,7 +157,7 @@ def main():
     batch_size = max(1, args.batch_size)
 
     print("Loading processor and model...")
-    processor = AutoProcessor.from_pretrained(model_id, use_fast=False)
+    processor = AutoProcessor.from_pretrained(base_model_id, use_fast=False)
     model_kwargs = dict(
         torch_dtype=torch.bfloat16,
         device_map="auto",
@@ -165,7 +166,10 @@ def main():
         model_kwargs["attn_implementation"] = "kernels-community/flash-attn2"
         print("Using Flash Attention 2 (kernels-community/flash-attn2).")
     try:
-        model = GlmOcrForConditionalGeneration.from_pretrained(model_id, **model_kwargs)
+        model = GlmOcrForConditionalGeneration.from_pretrained(base_model_id, **model_kwargs)
+        device = model.device
+        model.load_adapter(adapter_id)
+        model.to(device)
     except Exception as e:
         if not args.no_flash_attn and "flash" in str(e).lower():
             print(f"Flash Attention load failed: {e}", file=sys.stderr)
