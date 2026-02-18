@@ -19,9 +19,6 @@ kernels  # for Flash Attention (kernels-community); install with: pip install -U
 # Labels step (Vertex AI Gemini OCR)
 google-genai>=0.8.0
 
-# Fine-tuning (LoRA)
-peft>=0.10.0
-
-# Fine-tuning with Unsloth (optional; use train_unsloth.py)
+# Fine-tuning (Unsloth: train_unsloth.py)
 unsloth
 trl>=0.15.0

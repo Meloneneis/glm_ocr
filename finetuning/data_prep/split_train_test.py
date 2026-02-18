@@ -26,13 +26,13 @@ def main():
     parser.add_argument(
         "--train-size",
         type=int,
-        default=1000,
+        default=8500,
         help="Number of images for training (default 1000).",
     )
     parser.add_argument(
         "--test-size",
         type=int,
-        default=100,
+        default=510,
         help="Number of images for test (default 100).",
     )
     parser.add_argument(

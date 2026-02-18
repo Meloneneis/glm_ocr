@@ -1,7 +1,7 @@
 """
 Fine-tune GLM-OCR with Unsloth (FastVisionModel + LoRA + UnslothVisionDataCollator).
 
-Uses same data as train_lora.py: finetuning/output (train.txt, test.txt, labels.json).
+Uses finetuning/output (train.txt, test.txt, labels.json).
 Default: 100 train / 10 test, 1 epoch. Saves to finetuning/train/out_unsloth.
 
 Run from project root:
@@ -31,14 +31,23 @@ def get_data(output_dir: Path, labels_path: Path, train_txt: Path, test_txt: Pat
     return train, test
 
 
-def build_messages_dataset(data_dir: Path, pairs: list):
+class LazyMessagesDataset:
     """
-    Build list of examples in Unsloth vision format: each item is
-    {"messages": [user with image+text, assistant with text]}.
+    Dataset that loads images on demand in __getitem__ to avoid loading
+    thousands of images into RAM at once (which causes OOM kill with large train_size).
+    Returns Unsloth vision format: {"messages": [user with image+text, assistant with text]}.
     """
-    out = []
-    for name, label in pairs:
-        path = data_dir / name
+
+    def __init__(self, data_dir: Path, pairs: list):
+        self.data_dir = data_dir
+        self.pairs = pairs
+
+    def __len__(self):
+        return len(self.pairs)
+
+    def __getitem__(self, idx):
+        name, label = self.pairs[idx]
+        path = self.data_dir / name
         image = Image.open(path).convert("RGB")
         messages = [
             {
@@ -53,31 +62,30 @@ def build_messages_dataset(data_dir: Path, pairs: list):
                 "content": [{"type": "text", "text": label}],
             },
         ]
-        out.append({"messages": messages})
-    return out
+        return {"messages": messages}
 
 
 def main():
     parser = argparse.ArgumentParser(description="Fine-tune GLM-OCR with Unsloth.")
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
-    parser.add_argument("--train-size", type=int, default=200)
-    parser.add_argument("--test-size", type=int, default=20)
+    parser.add_argument("--train-size", type=int, default=99999)
+    parser.add_argument("--test-size", type=int, default=99999)
     # Defaults aligned with Unsloth DeepSeek-OCR 2 / DeepSeek-OCR (3B) notebook.
     parser.add_argument("--epochs", type=int, default=3, help="Number of training epochs (notebook uses max_steps=60 for quick run).")
     parser.add_argument("--batch-size", type=int, default=16, help="Per-device batch size (notebook: 2).")
     parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate (notebook: 2e-4).")
-    parser.add_argument("--max-length", type=int, default=2048)
+    parser.add_argument("--max-length", type=int, default=4096)
     parser.add_argument("--save-dir", type=Path, default=None)
     parser.add_argument("--load-in-4bit", action="store_true", help="Load model in 4bit to reduce VRAM.")
     parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank (notebook: 16).")
     parser.add_argument("--lora-alpha", type=int, default=16, help="LoRA alpha (notebook: 16).")
     parser.add_argument("--lora-dropout", type=float, default=0.0, help="LoRA dropout (notebook: 0).")
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1, help="Gradient accumulation steps (notebook: 4; effective batch = batch_size * this).")
-    parser.add_argument("--warmup-steps", type=int, default=50, help="LR warmup steps (notebook: 5).")
+    parser.add_argument("--warmup-steps", type=int, default=100, help="LR warmup steps.")
     parser.add_argument("--weight-decay", type=float, default=0.001, help="Weight decay (notebook: 0.001).")
     parser.add_argument("--seed", type=int, default=3407, help="Random seed (notebook: 3407).")
     parser.add_argument("--eval-steps", type=int, default=None, help="Evaluate every N steps. If not set, evaluate once per epoch.")
-    parser.add_argument("--eval-batch-size", type=int, default=None, help="Per-device batch size for evaluation (default 1 to avoid OOM; set to match --batch-size if you have enough VRAM).")
+    parser.add_argument("--eval-batch-size", type=int, default=4, help="Per-device batch size for evaluation (default 1 to avoid OOM; set to match --batch-size if you have enough VRAM).")
     args = parser.parse_args()
 
     train_txt = args.output_dir / "train.txt"
@@ -126,8 +134,9 @@ def main():
     )
     FastVisionModel.for_training(model)
 
-    train_data = build_messages_dataset(args.output_dir, train_list)
-    eval_data = build_messages_dataset(args.output_dir, test_list)
+    # Lazy datasets: load images in __getitem__ to avoid OOM with large train_size (e.g. 8500).
+    train_data = LazyMessagesDataset(args.output_dir, train_list)
+    eval_data = LazyMessagesDataset(args.output_dir, test_list)
 
     # GLM-OCR chat template: user yields "[gMASK]\n" + prompt + "\n", then add_generation_prompt adds "\n"; assistant starts with "\n".
     instruction_part = "[gMASK]\n" + PROMPT + "\n\n"
