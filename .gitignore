@@ -11,8 +11,10 @@ __pycache__/
 # Data (large PDFs – keep locally only)
 data/
 
-# Finetuning generated output (images, splits, labels)
-finetuning/output/
+# Unsloth / training
+finetuning/train/out_unsloth/
+finetuning/train/unsloth_compiled_cache/
+unsloth_compiled_cache/
 
 # OS
 .DS_Store

@@ -105,7 +105,7 @@ def main():
     parser.add_argument(
         "--workers",
         type=int,
-        default=4,
+        default=64,
         metavar="N",
         help="Number of parallel workers (default 1). Use e.g. 5 to speed up.",
     )
