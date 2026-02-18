@@ -27,7 +27,7 @@ The model does **not** accept PDF bytes directly; it expects **images** (`pixel_
 |--------|--------|
 | **`finetuning/data_prep/`** | `pdf_to_images.py` samples PDFs, renders pages to images (named like `{stem}_page_0001.png`) in `output/`. `split_train_test.py` splits images into train (e.g. 1000) and test (e.g. 100) with `train.txt` / `test.txt`. |
 | **`finetuning/labels/`** | `test_gemini_ocr.py` tests Vertex AI Gemini OCR on one image (ADC). `label_all_vertex.py` labels all images (e.g. 1100) with Vertex AI Gemini, progress bar, retries, and writes `labels.json`. |
-| **`finetuning/train/`** | `train_unsloth.py` — Unsloth FastVisionModel + LoRA + UnslothVisionDataCollator; lazy dataset (images loaded on demand to avoid RAM OOM). `tokenize_labels.py` — tokenize `labels.json` and report max tokens per page. Both use `output/` (`train.txt`, `test.txt`, `labels.json`). |
+| **`finetuning/train/`** | `train_unsloth.py` — Unsloth FastVisionModel + LoRA + UnslothVisionDataCollator; lazy dataset (images loaded on demand to avoid RAM OOM). `tokenize_labels.py` — tokenize `labels.json` and report max tokens per page. **Colab:** `colab_setup.md` (copy-paste cells) and `glm_ocr_colab.ipynb` (notebook to open in Google Colab). Both use `output/` (`train.txt`, `test.txt`, `labels.json`). |
 | **`finetuning/output/`** | Generated data: rendered images, `train.txt`, `test.txt`, `labels.json`; consumed by `train/`. Tracked in the repo. |
 
 ---
@@ -173,6 +173,8 @@ python scripts/test_single_image.py
    Options: `--output-dir`, `--train-size`, `--test-size`, `--epochs`, `--batch-size`, `--lr`, `--max-length`, `--save-dir`, `--load-in-4bit`, `--lora-r`, `--lora-alpha`, `--lora-dropout`, `--gradient-accumulation-steps`, `--warmup-steps` (default 100), `--weight-decay`, `--seed`, `--eval-steps`, `--eval-batch-size`. Use **`--no-truncate`** or a large `--max-length` to avoid truncating OCR text (very long docs may OOM).
 
    Saved checkpoints: `finetuning/train/out_unsloth/` (adapter + processor). Use the same processor and base model for inference.
+
+   **Training on Google Colab:** Use the notebook `finetuning/train/glm_ocr_colab.ipynb` (upload to Colab or open from the repo). Or copy-paste the code cells from `finetuning/train/colab_setup.md`. Set runtime to GPU, then clone the repo, install deps, and run `train_unsloth.py`; put your data in `finetuning/output/` (upload or mount Drive).
 
 ---
 

@@ -72,7 +72,7 @@ def main():
     parser.add_argument("--test-size", type=int, default=99999)
     # Defaults aligned with Unsloth DeepSeek-OCR 2 / DeepSeek-OCR (3B) notebook.
     parser.add_argument("--epochs", type=int, default=3, help="Number of training epochs (notebook uses max_steps=60 for quick run).")
-    parser.add_argument("--batch-size", type=int, default=16, help="Per-device batch size (notebook: 2).")
+    parser.add_argument("--batch-size", type=int, default=8, help="Per-device batch size (notebook: 2).")
     parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate (notebook: 2e-4).")
     parser.add_argument("--max-length", type=int, default=4096)
     parser.add_argument("--save-dir", type=Path, default=None)
@@ -80,7 +80,7 @@ def main():
     parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank (notebook: 16).")
     parser.add_argument("--lora-alpha", type=int, default=16, help="LoRA alpha (notebook: 16).")
     parser.add_argument("--lora-dropout", type=float, default=0.0, help="LoRA dropout (notebook: 0).")
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=1, help="Gradient accumulation steps (notebook: 4; effective batch = batch_size * this).")
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=2, help="Gradient accumulation steps (notebook: 4; effective batch = batch_size * this).")
     parser.add_argument("--warmup-steps", type=int, default=100, help="LR warmup steps.")
     parser.add_argument("--weight-decay", type=float, default=0.001, help="Weight decay (notebook: 0.001).")
     parser.add_argument("--seed", type=int, default=3407, help="Random seed (notebook: 3407).")
