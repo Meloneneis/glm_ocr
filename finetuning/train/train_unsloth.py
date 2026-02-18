@@ -80,7 +80,7 @@ def main():
     parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank (notebook: 16).")
     parser.add_argument("--lora-alpha", type=int, default=16, help="LoRA alpha (notebook: 16).")
     parser.add_argument("--lora-dropout", type=float, default=0.0, help="LoRA dropout (notebook: 0).")
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=2, help="Gradient accumulation steps (notebook: 4; effective batch = batch_size * this).")
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=1, help="Gradient accumulation steps (notebook: 4; effective batch = batch_size * this).")
     parser.add_argument("--warmup-steps", type=int, default=100, help="LR warmup steps.")
     parser.add_argument("--weight-decay", type=float, default=0.001, help="Weight decay (notebook: 0.001).")
     parser.add_argument("--seed", type=int, default=3407, help="Random seed (notebook: 3407).")
