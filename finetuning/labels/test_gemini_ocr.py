@@ -16,7 +16,18 @@ from pathlib import Path
 # Use your GCP project ID (from the console). Override with env GOOGLE_CLOUD_PROJECT if needed.
 DEFAULT_PROJECT_ID = "project-7f39f9fe-005d-48f0-bf1"
 DEFAULT_LOCATION = "us-central1"
-OCR_PROMPT = "Extract all text from this document image exactly as it appears. Preserve layout and line breaks. Output only the extracted text, no explanation."
+
+OCR_PROMPT = """Extract all text from this document image and output it according to these rules. Output only the extracted text, no explanation.
+
+1) Page numbers: Remove centered page numbers like "- 2 -" or "- 3 -" from each page. Do not include them in the output.
+
+2) Left margin numbers: Keep all numbers in the left margin (e.g. line numbers, paragraph numbers) as they appear. Do not remove them.
+
+3) Paragraphs: Write exactly one line per paragraph. Do not insert line breaks within a paragraph; each paragraph is a single output line.
+
+4) De-hyphenation: If a word was split across two lines with a hyphen (e.g. "docu-" on one line and "ment" on the next), join it into one word and remove the hyphen (e.g. "document"). Do this for all line-break hyphenations.
+
+5) Separate text blocks: On the first page (and anywhere else) there are often text blocks on the right side of the page (e.g. marginalia, side notes, or a second column). Treat these as separate text blocks from the main left-side body. Do not merge text that appears on the same visual line but belongs to different blocks (left vs right). Output each block separately: each line within a block on its own line. So if one visual line has left-side text and right-side text, output the left-side line and the right-side line as two distinct lines, in logical order (e.g. main block first, then right-side block), rather than concatenating them into one line."""
 
 
 def main():
@@ -82,7 +93,10 @@ def main():
         raise
 
     print("--- OCR result ---")
-    print(response.text or "(no text)")
+    text = response.text or "(no text)"
+    # Show line numbers so you can tell real line breaks from output formatting
+    for i, line in enumerate(text.splitlines(), start=1):
+        print(f"{i:4d}  {line}")
     print("--- done ---")
 
 

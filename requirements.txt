@@ -16,5 +16,5 @@ pypdfium2==5.4.0
 kernels  # for Flash Attention (kernels-community); install with: pip install -U kernels
 # flash-attn  # optional; install via the wheel URL above for torch 2.10 + cu128 + cp311
 
-# Labels step (Gemini OCR)
-google-generativeai>=0.8.0
+# Labels step (Vertex AI Gemini OCR)
+google-genai>=0.8.0

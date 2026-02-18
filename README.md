@@ -26,7 +26,7 @@ The model does **not** accept PDF bytes directly; it expects **images** (`pixel_
 | Folder | Purpose |
 |--------|--------|
 | **`finetuning/data_prep/`** | `pdf_to_images.py` samples PDFs, renders pages to images (named like `{stem}_page_0001.png`) in `output/`. `split_train_test.py` splits images into train (e.g. 1000) and test (e.g. 100) with `train.txt` / `test.txt`. |
-| **`finetuning/labels/`** | `gemini_ocr_labels.py` uses the Gemini API (API key or Vertex AI) to OCR each image with a configurable prompt and writes `labels.json`. `test_gemini_ocr.py` tests Vertex AI Gemini OCR on one image (Application Default Credentials). |
+| **`finetuning/labels/`** | `test_gemini_ocr.py` tests Vertex AI Gemini OCR on one image (ADC). `label_all_vertex.py` labels all images (e.g. 1100) with Vertex AI Gemini, progress bar, retries, and writes `labels.json`. |
 | **`finetuning/train/`** | Scripts and config to load (image, label) pairs from `output/` and run fine-tuning of GLM-OCR. |
 | **`finetuning/output/`** | Generated data only: rendered images, manifest, and labels produced by the steps above; consumed by `train/`. Typically gitignored. |
 
@@ -130,20 +130,19 @@ python scripts/test_single_image.py
 
    Creates `finetuning/output/train.txt` and `finetuning/output/test.txt` (one image filename per line).
 
-3. **Generate labels with Gemini** (Vertex AI with ADC, or API key):
+3. **Generate labels with Gemini** (Vertex AI with ADC):
 
-   - **Test on one image (Vertex AI):**  
+   - **Test on one image:**  
      After `gcloud auth application-default login` and enabling the Vertex AI API:
      ```bash
      python finetuning/labels/test_gemini_ocr.py --image path/to/image.png
      ```
 
-   - **Label all images in a list (e.g. train):**  
-     With `GEMINI_API_KEY` set (Google AI Studio) or Vertex ADC:
+   - **Label all images** (uses `train.txt` + `test.txt` if present, else all PNGs; progress bar, retries, checkpoints):
      ```bash
-     python finetuning/labels/gemini_ocr_labels.py --list finetuning/output/train.txt --output finetuning/output/labels.json
+     python finetuning/labels/label_all_vertex.py
      ```
-     Use `--prompt` to change the OCR instruction, `--limit N` to process only N images.
+     Output: `finetuning/output/labels.json`. Use `--output`, `--list`, or `--limit N` to customize.
 
    Labels are saved as JSON: `{"image1.png": "extracted text...", ...}`.
 
