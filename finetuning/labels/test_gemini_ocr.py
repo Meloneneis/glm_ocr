@@ -21,13 +21,17 @@ OCR_PROMPT = """Extract all text from this document image and output it accordin
 
 1) Page numbers: Remove centered page numbers like "- 2 -" or "- 3 -" from each page. Do not include them in the output.
 
-2) Left margin numbers: Keep all numbers in the left margin (e.g. line numbers, paragraph numbers) as they appear. Do not remove them.
+2) Randnummern (left-margin paragraph numbers): Numbers in the left margin that label a paragraph (e.g. "13", "41") are Randnummern. Never output a Randnummer on its own line. Always put it at the beginning of the same line as the paragraph it refers to, with a space after it (e.g. "13 1. Die Kostenentscheidung beruht auf ..." as one line, not "13" on one line and "1. Die Kostenentscheidung..." on the next).
 
-3) Paragraphs: Write exactly one line per paragraph. Do not insert line breaks within a paragraph; each paragraph is a single output line.
+3) Paragraphs: Write exactly one line per paragraph. Do not insert line breaks within a paragraph; each paragraph is a single output line. If there is a Randnummer for a paragraph, it is the first token on that line (see rule 2).
 
-4) De-hyphenation: If a word was split across two lines with a hyphen (e.g. "docu-" on one line and "ment" on the next), join it into one word and remove the hyphen (e.g. "document"). Do this for all line-break hyphenations.
+4) Judge names: When judge names appear in a staggered or multi-line layout (e.g. several names on one row, more names indented on the next row), output all of them as a single line, separated by spaces (e.g. "Meier-Beck Schmidt-Räntsch Kirchhoff Roloff Tolkmitt").
 
-5) Separate text blocks: On the first page (and anywhere else) there are often text blocks on the right side of the page (e.g. marginalia, side notes, or a second column). Treat these as separate text blocks from the main left-side body. Do not merge text that appears on the same visual line but belongs to different blocks (left vs right). Output each block separately: each line within a block on its own line. So if one visual line has left-side text and right-side text, output the left-side line and the right-side line as two distinct lines, in logical order (e.g. main block first, then right-side block), rather than concatenating them into one line."""
+5) De-hyphenation: If a word was split across two lines with a hyphen (e.g. "docu-" on one line and "ment" on the next), join it into one word and remove the hyphen (e.g. "document"). Do this for all line-break hyphenations.
+
+6) Separate text blocks (right-side only): Only treat as separate blocks content that is clearly in a different column or area—e.g. marginalia or a second column on the right side of the page. Left-margin numbers (Randnummern) are part of the main body and must stay on the same line as their paragraph (rule 2). Judge names in a staggered layout are one block—output as one line (rule 4). For other right-side blocks: do not merge text that belongs to different blocks; output each block separately, each line within a block on its own line.
+
+7) Any handwritten notes, or numbers without context that are clearly not part of the document can be safely removed. However do not remove legit Metadata such as the Aktenzeichen or ECLI."""
 
 
 def main():

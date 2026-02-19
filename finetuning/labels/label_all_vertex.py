@@ -1,11 +1,12 @@
 """
-Label all ~1100 images using Vertex AI Gemini (ADC). Optional parallel workers.
+Label images using Vertex AI Gemini (ADC). Optional parallel workers.
 On error: pause 1 minute and retry, up to 5 attempts per image.
 Saves to finetuning/output/labels.json (and checkpoint every 100 images).
 
-If train.txt and test.txt exist in output-dir, uses those (1000 + 100). Otherwise
-uses all PNGs. Already-labeled images (present in labels.json) are skipped so you
-can resume after a stop.
+Image list: if train.txt and test.txt exist in output-dir, uses those; otherwise
+uses all PNGs in output-dir. Only images not yet in labels.json are labeled
+(missing labels are filled in), so you can add new PNGs (e.g. after pdf_to_images
+--num-pages) and re-run to label only the new ones.
 
 Run from project root:
   conda activate glm_ocr
@@ -83,6 +84,11 @@ def main():
         help="Output JSON path (default: <output-dir>/labels.json).",
     )
     parser.add_argument(
+        "--all-pngs",
+        action="store_true",
+        help="Use all PNGs in output-dir (ignore train.txt/test.txt). Use this to label new images after adding more pages.",
+    )
+    parser.add_argument(
         "--list",
         type=Path,
         action="append",
@@ -115,8 +121,10 @@ def main():
         print(f"Output directory not found: {args.output_dir}", file=sys.stderr)
         sys.exit(1)
 
-    # Image list: from --list files, or train.txt + test.txt if present, or all PNGs
-    if args.list:
+    # Image list: --all-pngs, or --list files, or train.txt + test.txt if present, or all PNGs
+    if args.all_pngs:
+        filenames = sorted(f.name for f in args.output_dir.glob("*.png"))
+    elif args.list:
         filenames = []
         for list_path in args.list:
             p = list_path if list_path.is_file() else args.output_dir / list_path.name
