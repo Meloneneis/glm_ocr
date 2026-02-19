@@ -11,6 +11,10 @@ __pycache__/
 # Data (large PDFs – keep locally only)
 data/
 
+# Labeling/training output (images, labels, splits – use Drive or other backup)
+finetuning/output/
+finetuning/output_20Jhd/
+
 # Unsloth / training
 finetuning/train/out_unsloth/
 finetuning/train/unsloth_compiled_cache/
