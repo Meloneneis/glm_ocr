@@ -10,6 +10,7 @@ Then run (from project root):
 """
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -31,7 +32,36 @@ OCR_PROMPT = """Extract all text from this document image and output it accordin
 
 6) Separate text blocks (right-side only): Only treat as separate blocks content that is clearly in a different column or area—e.g. marginalia or a second column on the right side of the page. Left-margin numbers (Randnummern) are part of the main body and must stay on the same line as their paragraph (rule 2). Judge names in a staggered layout are one block—output as one line (rule 4). For other right-side blocks: do not merge text that belongs to different blocks; output each block separately, each line within a block on its own line.
 
-7) Any handwritten notes, or numbers without context that are clearly not part of the document can be safely removed. However do not remove legit Metadata such as the Aktenzeichen or ECLI."""
+7) Any handwritten notes, or numbers without context that are clearly not part of the document can be safely removed. However do not remove legit Metadata such as the Aktenzeichen or ECLI.
+
+8) Blank or empty pages: If the page contains no meaningful text after applying all rules above (e.g. only a page number, only whitespace, or a completely blank page), output nothing — produce an empty response. Do NOT output the page number, do NOT write phrases like "blank page" or "no text found".
+
+9) Strict output format: Your entire output must consist exclusively of extracted document text. Never output JSON, code blocks, markdown formatting, commentary, or meta-text. If the image is corrupted or unreadable to the point where you cannot extract any text at all, output exactly the single word ERROR and nothing else."""
+
+# Dedicated prompt for older court decisions (1950s/1960s): simpler and self-contained.
+OCR_PROMPT_OLD = """Extract all text from this document image. Output only the extracted text, no explanation.
+
+Layout:
+- One output line per paragraph. Do not split a paragraph across multiple lines.
+- The block that lists judges and roles (e.g. Senatspräsident Richter, Bundesrichter Dr. Peetz, ... als Urkundsbeamter) is one paragraph: output it as a single line with names and roles separated by spaces or commas, not each person on a new line.
+- If a margin number (Randnummer) labels a paragraph, put it at the start of that paragraph line, then the text (e.g. "13 1. Die Kostenentscheidung...").
+
+Cleanup:
+- Omit centered page numbers like "- 2 -".
+- Omit handwritten numbers or notes in corners (e.g. "35").
+- Join hyphenated line-breaks into one word (e.g. "docu-" + "ment" → "document").
+
+Redactions:
+- Where solid black rectangles cover text, output [redacted] (exactly that, lowercase in brackets). One [redacted] per black rectangle, in place. Example: "Karl [redacted] aus H [redacted] geboren dort am [redacted] 1902".
+
+Unclear print:
+- If a letter is hard to read, choose the spelling that makes sense in German. Do not invent text.
+
+Blank or empty pages:
+- If the page contains no meaningful text after applying all rules above (e.g. only a page number, only whitespace, or a completely blank page), output nothing — produce an empty response. Do NOT output the page number, do NOT write phrases like "blank page" or "no text found".
+
+Strict output format:
+- Your entire output must consist exclusively of extracted document text. Never output JSON, code blocks, markdown formatting, commentary, or meta-text. If the image is corrupted or unreadable to the point where you cannot extract any text at all, output exactly the single word ERROR and nothing else."""
 
 
 def main():
@@ -54,6 +84,19 @@ def main():
         type=str,
         default=OCR_PROMPT,
         help="OCR prompt to send to Gemini.",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="gemini-2.5-pro",
+        help="Vertex AI Gemini model (default: gemini-2.5-pro for better German/OCR).",
+    )
+    parser.add_argument(
+        "--write-labels",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="After OCR, write the result to DIR/labels.json under the image filename. Use e.g. finetuning/output.",
     )
     args = parser.parse_args()
 
@@ -81,7 +124,7 @@ def main():
     try:
         client = genai.Client(http_options=HttpOptions(api_version="v1"))
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model=args.model,
             contents=[
                 Part.from_bytes(data=image_bytes, mime_type=mime),
                 args.prompt,
@@ -98,10 +141,24 @@ def main():
 
     print("--- OCR result ---")
     text = response.text or "(no text)"
+    # Normalize redaction placeholder to [redacted] (model sometimes outputs [REDACTED])
+    text = re.sub(r"\[REDACTED\]", "[redacted]", text, flags=re.IGNORECASE)
     # Show line numbers so you can tell real line breaks from output formatting
     for i, line in enumerate(text.splitlines(), start=1):
         print(f"{i:4d}  {line}")
     print("--- done ---")
+
+    if args.write_labels is not None:
+        import json
+        labels_path = args.write_labels / "labels.json"
+        labels = {}
+        if labels_path.is_file():
+            labels = json.loads(labels_path.read_text(encoding="utf-8"))
+        name = args.image.name
+        labels[name] = text if text != "(no text)" else ""
+        labels_path.parent.mkdir(parents=True, exist_ok=True)
+        labels_path.write_text(json.dumps(labels, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"Updated {labels_path} with label for {name}")
 
 
 if __name__ == "__main__":
