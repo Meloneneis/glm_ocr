@@ -219,10 +219,12 @@ def main():
     class CERCallback(TrainerCallback):
         """After each evaluation, compute CER across the full eval set and show one sample."""
 
-        def __init__(self, processor, output_dir: Path, test_list: list, max_new_tokens: int = 512):
+        def __init__(self, processor, output_dir: Path, test_list: list, max_new_tokens: int = 512, cer_samples: int = 10):
+            import random
             self.processor = processor
             self.output_dir = output_dir
             self.test_list = test_list
+            self.cer_subset = random.sample(test_list, min(cer_samples, len(test_list)))
             self.max_new_tokens = max_new_tokens
 
         def _generate_one(self, model, name):
@@ -267,13 +269,12 @@ def main():
                 print("=" * 60 + "\n")
                 return control
 
-            import random
             model.eval()
             cer_scores = []
             first_generated = None
             first_label = None
             first_name = None
-            samples = random.sample(self.test_list, min(10, len(self.test_list)))
+            samples = self.cer_subset
             total = len(samples)
             for i, (name, label) in enumerate(samples):
                 print(f"  CER generation: {i + 1}/{total}", end="\r", flush=True)
