@@ -216,27 +216,16 @@ def main():
             prev = curr
         return prev[m] / n
 
-    class SampleGenerationCallback(TrainerCallback):
-        """After each evaluation, print one sample generation vs label with CER metric."""
+    class CERCallback(TrainerCallback):
+        """After each evaluation, compute CER across the full eval set and show one sample."""
 
         def __init__(self, processor, output_dir: Path, test_list: list, max_new_tokens: int = 512):
             self.processor = processor
             self.output_dir = output_dir
-            self.sample = test_list[0] if test_list else None
+            self.test_list = test_list
             self.max_new_tokens = max_new_tokens
 
-        def on_evaluate(self, args, state, control, model=None, metrics=None, **kwargs):
-            step = state.global_step if state else 0
-            print("\n" + "=" * 60)
-            print(f"Evaluation results (step {step})")
-            print("=" * 60)
-            if metrics:
-                for k, v in sorted(metrics.items()):
-                    print(f"  {k}: {v}")
-            if model is None or self.sample is None:
-                print("=" * 60 + "\n")
-                return control
-            name, label = self.sample
+        def _generate_one(self, model, name):
             image = Image.open(self.output_dir / name).convert("RGB")
             messages = [
                 {
@@ -258,20 +247,50 @@ def main():
                 inputs = inputs.to(model.device)
             else:
                 inputs = {k: v.to(model.device) if hasattr(v, "to") else v for k, v in inputs.items()}
-            model.eval()
             with torch.no_grad():
                 out = model.generate(**inputs, max_new_tokens=self.max_new_tokens)
-            # Decode with skip_special_tokens=True. GLM-OCR special tokens include
-            # <|image|>, <think>, </think>; strip any leftover occurrences for display.
             generated = self.processor.decode(out[0], skip_special_tokens=True)
             if PROMPT in generated:
                 generated = generated.split(PROMPT)[-1]
             generated = generated.replace("<think>", "").replace("</think>", "").replace("<|image|>", "").strip()
-            cer = _char_error_rate(generated, label)
+            return generated
+
+        def on_evaluate(self, args, state, control, model=None, metrics=None, **kwargs):
+            step = state.global_step if state else 0
+            print("\n" + "=" * 60)
+            print(f"Evaluation results (step {step})")
+            print("=" * 60)
+            if metrics:
+                for k, v in sorted(metrics.items()):
+                    print(f"  {k}: {v}")
+            if model is None or not self.test_list:
+                print("=" * 60 + "\n")
+                return control
+
+            import random
+            model.eval()
+            cer_scores = []
+            first_generated = None
+            first_label = None
+            first_name = None
+            samples = random.sample(self.test_list, min(10, len(self.test_list)))
+            total = len(samples)
+            for i, (name, label) in enumerate(samples):
+                print(f"  CER generation: {i + 1}/{total}", end="\r", flush=True)
+                generated = self._generate_one(model, name)
+                cer = _char_error_rate(generated, label)
+                cer_scores.append(cer)
+                if first_generated is None:
+                    first_generated, first_label, first_name = generated, label, name
+
+            avg_cer = sum(cer_scores) / len(cer_scores)
             print("-" * 60)
-            print(f"Sample CER: {cer:.4f}  ({name})")
-            print("Label:     ", (label[:500] + "..." if len(label) > 500 else label) or "(empty)")
-            print("Generated: ", (generated[:500] + "..." if len(generated) > 500 else generated) or "(empty)")
+            print(f"  Eval CER (avg over {total} samples): {avg_cer:.4f}")
+            print(f"  CER min: {min(cer_scores):.4f}  max: {max(cer_scores):.4f}")
+            print("-" * 60)
+            print(f"Sample ({first_name}):")
+            print("  Label:     ", (first_label[:500] + "..." if len(first_label) > 500 else first_label) or "(empty)")
+            print("  Generated: ", (first_generated[:500] + "..." if len(first_generated) > 500 else first_generated) or "(empty)")
             print("=" * 60 + "\n")
             return control
 
