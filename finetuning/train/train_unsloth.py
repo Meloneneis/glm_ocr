@@ -201,8 +201,23 @@ def main():
                 torch.cuda.empty_cache()
             return control
 
+    def _char_error_rate(prediction: str, reference: str) -> float:
+        """Compute Character Error Rate via Levenshtein distance."""
+        n = len(reference)
+        m = len(prediction)
+        if n == 0:
+            return 0.0 if m == 0 else 1.0
+        prev = list(range(m + 1))
+        for i in range(1, n + 1):
+            curr = [i] + [0] * m
+            for j in range(1, m + 1):
+                cost = 0 if reference[i - 1] == prediction[j - 1] else 1
+                curr[j] = min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost)
+            prev = curr
+        return prev[m] / n
+
     class SampleGenerationCallback(TrainerCallback):
-        """After each evaluation, print one sample: model generation vs label (decode with skip_special_tokens)."""
+        """After each evaluation, print one sample generation vs label with CER metric."""
 
         def __init__(self, processor, output_dir: Path, test_list: list, max_new_tokens: int = 512):
             self.processor = processor
@@ -210,8 +225,16 @@ def main():
             self.sample = test_list[0] if test_list else None
             self.max_new_tokens = max_new_tokens
 
-        def on_evaluate(self, args, state, control, model=None, **kwargs):
+        def on_evaluate(self, args, state, control, model=None, metrics=None, **kwargs):
+            step = state.global_step if state else 0
+            print("\n" + "=" * 60)
+            print(f"Evaluation results (step {step})")
+            print("=" * 60)
+            if metrics:
+                for k, v in sorted(metrics.items()):
+                    print(f"  {k}: {v}")
             if model is None or self.sample is None:
+                print("=" * 60 + "\n")
                 return control
             name, label = self.sample
             image = Image.open(self.output_dir / name).convert("RGB")
@@ -244,10 +267,9 @@ def main():
             if PROMPT in generated:
                 generated = generated.split(PROMPT)[-1]
             generated = generated.replace("<think>", "").replace("</think>", "").replace("<|image|>", "").strip()
-            step = state.global_step if state else 0
-            print("\n" + "=" * 60)
-            print(f"Sample generation vs label (step {step})")
-            print("=" * 60)
+            cer = _char_error_rate(generated, label)
+            print("-" * 60)
+            print(f"Sample CER: {cer:.4f}  ({name})")
             print("Label:     ", (label[:500] + "..." if len(label) > 500 else label) or "(empty)")
             print("Generated: ", (generated[:500] + "..." if len(generated) > 500 else generated) or "(empty)")
             print("=" * 60 + "\n")
@@ -267,8 +289,9 @@ def main():
         callbacks=callbacks,
     )
     # Evaluation before training (baseline)
-    print("Running evaluation before training (baseline)...")
-    trainer.evaluate()
+    print("Running baseline evaluation before training...")
+    baseline_metrics = trainer.evaluate()
+    print("Baseline metrics:", baseline_metrics)
     trainer.train()
     trainer.save_model(str(save_dir))
     processor.save_pretrained(save_dir)
