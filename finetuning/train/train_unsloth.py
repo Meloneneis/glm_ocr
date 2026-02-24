@@ -252,6 +252,7 @@ def main():
             with torch.no_grad():
                 out = model.generate(**inputs, max_new_tokens=self.max_new_tokens)
             generated = self.processor.decode(out[0], skip_special_tokens=True)
+            del inputs, out
             if PROMPT in generated:
                 generated = generated.split(PROMPT)[-1]
             generated = generated.replace("<think>", "").replace("</think>", "").replace("<|image|>", "").strip()
@@ -293,6 +294,8 @@ def main():
             print("  Label:     ", (first_label[:500] + "..." if len(first_label) > 500 else first_label) or "(empty)")
             print("  Generated: ", (first_generated[:500] + "..." if len(first_generated) > 500 else first_generated) or "(empty)")
             print("=" * 60 + "\n")
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             return control
 
     callbacks = [
