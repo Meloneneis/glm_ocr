@@ -296,7 +296,7 @@ def main():
 
     callbacks = [
         ClearCacheEvalCallback(),
-        SampleGenerationCallback(processor, args.output_dir, test_list, max_new_tokens=512),
+        CERCallback(processor, args.output_dir, test_list, max_new_tokens=512),
     ]
     trainer = SFTTrainer(
         model=model,
