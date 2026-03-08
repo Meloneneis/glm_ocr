@@ -3,6 +3,8 @@ Fine-tune GLM-OCR with Unsloth (FastVisionModel + LoRA + UnslothVisionDataCollat
 
 Uses finetuning/output (train.txt, test.txt, labels.json).
 Default: 100 train / 10 test, 1 epoch. Saves to finetuning/train/out_unsloth.
+CER (character error rate) is computed after each evaluation and uses extra GPU memory;
+if OOM occurs after the first epoch, lower --cer-samples and/or --cer-max-new-tokens.
 
 Run from project root:
   python finetuning/train/train_unsloth.py
@@ -86,6 +88,8 @@ def main():
     parser.add_argument("--seed", type=int, default=3407, help="Random seed (notebook: 3407).")
     parser.add_argument("--eval-steps", type=int, default=None, help="Evaluate every N steps. If not set, evaluate once per epoch.")
     parser.add_argument("--eval-batch-size", type=int, default=8, help="Per-device batch size for evaluation (default 1 to avoid OOM; set to match --batch-size if you have enough VRAM).")
+    parser.add_argument("--cer-samples", type=int, default=10, help="Number of test samples used for CER after each eval. Lower (e.g. 5 or 3) if OOM occurs after evaluation.")
+    parser.add_argument("--cer-max-new-tokens", type=int, default=512, help="Max new tokens for CER generation. Lower (e.g. 256 or 128) to reduce VRAM during CER.")
     args = parser.parse_args()
 
     train_txt = args.output_dir / "train.txt"
@@ -170,6 +174,7 @@ def main():
     if eval_batch_size > args.batch_size:
         eval_batch_size = args.batch_size
     print(f"Eval batch size: {eval_batch_size} (train batch size: {args.batch_size}).")
+    print(f"CER: {args.cer_samples} samples, max_new_tokens={args.cer_max_new_tokens} (use --cer-samples / --cer-max-new-tokens to reduce if OOM after eval).")
 
     training_args = SFTConfig(
         output_dir=str(save_dir),
@@ -200,6 +205,13 @@ def main():
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             return control
+
+    def _cap_label_to_tokens(processor, label: str, max_tokens: int) -> str:
+        """Truncate label to first max_tokens tokens and decode back, for fair CER vs capped generation."""
+        tokenizer = getattr(processor, "tokenizer", processor)
+        ids = tokenizer.encode(label, add_special_tokens=False)
+        ids_capped = ids[:max_tokens]
+        return tokenizer.decode(ids_capped, skip_special_tokens=True)
 
     def _char_error_rate(prediction: str, reference: str) -> float:
         """Compute Character Error Rate via Levenshtein distance."""
@@ -251,8 +263,11 @@ def main():
                 inputs = {k: v.to(model.device) if hasattr(v, "to") else v for k, v in inputs.items()}
             with torch.no_grad():
                 out = model.generate(**inputs, max_new_tokens=self.max_new_tokens)
-            generated = self.processor.decode(out[0], skip_special_tokens=True)
+            generated_ids = out[0].cpu().clone()
             del inputs, out
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            generated = self.processor.decode(generated_ids, skip_special_tokens=True)
             if PROMPT in generated:
                 generated = generated.split(PROMPT)[-1]
             generated = generated.replace("<think>", "").replace("</think>", "").replace("<|image|>", "").strip()
@@ -280,10 +295,13 @@ def main():
             for i, (name, label) in enumerate(samples):
                 print(f"  CER generation: {i + 1}/{total}", end="\r", flush=True)
                 generated = self._generate_one(model, name)
-                cer = _char_error_rate(generated, label)
+                label_capped = _cap_label_to_tokens(self.processor, label, self.max_new_tokens)
+                cer = _char_error_rate(generated, label_capped)
                 cer_scores.append(cer)
                 if first_generated is None:
-                    first_generated, first_label, first_name = generated, label, name
+                    first_generated, first_label, first_name = generated, label_capped, name
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
             avg_cer = sum(cer_scores) / len(cer_scores)
             print("-" * 60)
@@ -300,7 +318,13 @@ def main():
 
     callbacks = [
         ClearCacheEvalCallback(),
-        CERCallback(processor, args.output_dir, test_list, max_new_tokens=512),
+        CERCallback(
+            processor,
+            args.output_dir,
+            test_list,
+            max_new_tokens=args.cer_max_new_tokens,
+            cer_samples=args.cer_samples,
+        ),
     ]
     trainer = SFTTrainer(
         model=model,
