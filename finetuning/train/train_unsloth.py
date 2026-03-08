@@ -88,6 +88,7 @@ def main():
     parser.add_argument("--seed", type=int, default=3407, help="Random seed (notebook: 3407).")
     parser.add_argument("--eval-steps", type=int, default=None, help="Evaluate every N steps. If not set, evaluate once per epoch.")
     parser.add_argument("--eval-batch-size", type=int, default=8, help="Per-device batch size for evaluation (default 1 to avoid OOM; set to match --batch-size if you have enough VRAM).")
+    parser.add_argument("--no-cer", action="store_true", help="Disable CER computation after each evaluation (saves VRAM).")
     parser.add_argument("--cer-samples", type=int, default=10, help="Number of test samples used for CER after each eval. Lower (e.g. 5 or 3) if OOM occurs after evaluation.")
     parser.add_argument("--cer-max-new-tokens", type=int, default=512, help="Max new tokens for CER generation. Lower (e.g. 256 or 128) to reduce VRAM during CER.")
     args = parser.parse_args()
@@ -174,7 +175,10 @@ def main():
     if eval_batch_size > args.batch_size:
         eval_batch_size = args.batch_size
     print(f"Eval batch size: {eval_batch_size} (train batch size: {args.batch_size}).")
-    print(f"CER: {args.cer_samples} samples, max_new_tokens={args.cer_max_new_tokens} (use --cer-samples / --cer-max-new-tokens to reduce if OOM after eval).")
+    if args.no_cer:
+        print("CER: disabled (--no-cer).")
+    else:
+        print(f"CER: {args.cer_samples} samples, max_new_tokens={args.cer_max_new_tokens} (use --cer-samples / --cer-max-new-tokens to reduce if OOM after eval, --no-cer to disable).")
 
     training_args = SFTConfig(
         output_dir=str(save_dir),
@@ -316,16 +320,17 @@ def main():
                 torch.cuda.empty_cache()
             return control
 
-    callbacks = [
-        ClearCacheEvalCallback(),
-        CERCallback(
-            processor,
-            args.output_dir,
-            test_list,
-            max_new_tokens=args.cer_max_new_tokens,
-            cer_samples=args.cer_samples,
-        ),
-    ]
+    callbacks = [ClearCacheEvalCallback()]
+    if not args.no_cer:
+        callbacks.append(
+            CERCallback(
+                processor,
+                args.output_dir,
+                test_list,
+                max_new_tokens=args.cer_max_new_tokens,
+                cer_samples=args.cer_samples,
+            )
+        )
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
