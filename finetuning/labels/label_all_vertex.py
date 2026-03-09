@@ -31,7 +31,7 @@ OUTPUT_DIR = _PROJECT_ROOT / "finetuning" / "output_20Jhd"
 # Same prompts as test_gemini_ocr
 from test_gemini_ocr import OCR_PROMPT, OCR_PROMPT_OLD
 
-os.environ.setdefault("GOOGLE_CLOUD_PROJECT", os.environ.get("GOOGLE_CLOUD_PROJECT", "project-7f39f9fe-005d-48f0-bf1"))
+os.environ.setdefault("GOOGLE_CLOUD_PROJECT", os.environ.get("GOOGLE_CLOUD_PROJECT", "onyx-zodiac-349715"))
 os.environ.setdefault("GOOGLE_CLOUD_LOCATION", os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1"))
 os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "True")
 

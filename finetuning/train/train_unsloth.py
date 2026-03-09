@@ -19,7 +19,7 @@ from PIL import Image
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 OUTPUT_DIR = _PROJECT_ROOT / "finetuning" / "output"
-MODEL_ID = "unsloth/GLM-OCR"
+DEFAULT_MODEL_ID = "unsloth/GLM-OCR"
 PROMPT = "Text Recognition:"
 
 
@@ -72,6 +72,12 @@ class LazyMessagesDataset:
 
 def main():
     parser = argparse.ArgumentParser(description="Fine-tune GLM-OCR with Unsloth.")
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=DEFAULT_MODEL_ID,
+        help="Model to load: Hugging Face repo id (e.g. unsloth/GLM-OCR) or path to local merged/adapter (e.g. merged_21jhd or finetuning/train/merged_21jhd). Default: unsloth/GLM-OCR.",
+    )
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
     parser.add_argument("--train-size", type=int, default=99999)
     parser.add_argument("--test-size", type=int, default=99999)
@@ -118,8 +124,15 @@ def main():
     from trl import SFTConfig, SFTTrainer
     from transformers import TrainerCallback
 
+    model_id = args.model
+    if not model_id.startswith(("unsloth/", "hf://", "http")) and not Path(model_id).is_absolute():
+        # Resolve relative path from project root (e.g. merged_21jhd -> project_root/merged_21jhd)
+        resolved = (_PROJECT_ROOT / model_id).resolve()
+        if resolved.is_dir():
+            model_id = str(resolved)
+    print(f"Loading model: {model_id}")
     model, processor = FastVisionModel.from_pretrained(
-        MODEL_ID,
+        model_id,
         load_in_4bit=args.load_in_4bit,
         use_gradient_checkpointing="unsloth",
         max_seq_length=args.max_length,

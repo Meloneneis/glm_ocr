@@ -13,7 +13,7 @@ This project runs [GLM-OCR](https://huggingface.co/zai-org/GLM-OCR) (Z.ai’s mu
 | **`src/`** | Shared code: `generation_with_probs.py` (token-probability helpers used by PDF scripts when `--show-probs` is set). |
 | **`scripts/`** | Exploratory and utility scripts: `test_single_pdf.py`, `test_batch_pdf.py`, `test_single_image.py`, `pdf_to_images.py` (PDF → PNGs; full folder or `--num-pages` for data prep), `merge_adapter.py` (merge PEFT adapter into base model, full precision). Run from project root (e.g. `python scripts/test_single_pdf.py`). |
 | **`finetuning/`** | Pipeline for fine-tuning: `data_prep/` (e.g. `split_train_test.py`), `labels/`, `train/`, `output/` (rendered images and gold labels). |
-| **`inference/`** | Finetuned-model inference: `run_ocr.py` (batch OCR to JSON, resume, checkpoint), `test_ocr_sample.py` (small sample with formatted output). |
+| **`inference/`** | Finetuned-model inference: `run_ocr.py` (batch OCR to JSONL, resume, append every batch), `test_ocr_sample.py` (small sample with formatted output). |
 | **`requirements.txt`** | Python dependencies; includes notes for optional Flash Attention and `kernels`. |
 | **`data/`** | Directory for PDFs (e.g. drop files here; scripts can pick the first PDF under `data/` if no path is given). |
 
@@ -119,16 +119,38 @@ python scripts/test_single_image.py
 
 The inference scripts load **unsloth/GLM-OCR** as the base and a PEFT adapter (HuggingFace id or local path). Unsloth is imported before `transformers`/`peft` so optimizations apply. Generation stops at EOS (no truncation); `--max-new-tokens` is a safety cap (default 8192).
 
-- **Batch OCR to JSON** — `inference/run_ocr.py` runs the finetuned model on all PNGs in a directory, writes `results.json` (key = image path, value = text). Resume: skips images already in the file; checkpoints every 100 images. First run does a short warmup to trigger CUDA compilation.
+- **Batch OCR to JSONL** — `inference/run_ocr.py` runs the finetuned model on all PNGs in a directory and appends results to a **JSONL** file (one line per image). Each line is a JSON object: `{"path": "<rel_path>", "text": "...", "truncated": false, "token_probs": [...]}` (omit `token_probs` unless `--with-probs`). Resume: skips images whose `path` already appears in the file (streams the file to build the done set). Results are appended after every batch. First run does a short warmup to trigger CUDA compilation. Use **`--with-probs`** to add per-token probabilities to each line for confidence-based QC. Images that hit the token cap without EOS have `"truncated": true`; optionally a sidecar `{output_stem}_truncated.json` is written at the end with the list of truncated paths.
+
+  **Copy-paste: run merged 21jhd model on images with token probabilities:**
 
   ```bash
-  python inference/run_ocr.py --images-dir inference/21jhd/images --output inference/21jhd/results.json
-  python inference/run_ocr.py --model meloneneneis/glm_ocr_21jhd --batch-size 8 --limit 100
+  python inference/run_ocr.py --images-dir inference/21jhd/images/ --model inference/merged_21jhd/ --output inference/21jhd/results_with_probs.jsonl --with-probs
   ```
 
-- **Sample test (formatted output)** — `inference/test_ocr_sample.py` runs OCR on a small number of images and prints each result in a readable block.
+  Other examples:
 
   ```bash
+  python inference/run_ocr.py --images-dir inference/21jhd/images --output inference/21jhd/results.jsonl
+  python inference/run_ocr.py --model meloneneneis/glm_ocr_21jhd --batch-size 8 --limit 100
+  python inference/run_ocr.py --with-probs --output inference/21jhd/results_with_probs.jsonl
+  ```
+
+  **Convert existing JSON to JSONL:** If you have old run_ocr output as a single JSON file, use the one-off script (output path defaults to the same path with `.jsonl` extension):
+
+  ```bash
+  python inference/convert_results_json_to_jsonl.py inference/21jhd/results_with_probs.json
+  ```
+
+- **Sample test (formatted output)** — `inference/test_ocr_sample.py` runs OCR on a small number of images and prints each result (with line numbers and token count). Use **`--with-probs`** to print per-token probabilities so you can verify low-confidence tokens.
+
+  ```bash
+  # Single image in the inference folder
+  python inference/test_ocr_sample.py --image inference/your_image.png --batch-size 1
+
+  # With token probabilities (for QC / confidence check)
+  python inference/test_ocr_sample.py --image inference/your_image.png --batch-size 1 --with-probs
+
+  # Small sample from an images directory
   python inference/test_ocr_sample.py --num 5 --images-dir inference/21jhd/images
   ```
 
