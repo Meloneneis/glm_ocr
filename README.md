@@ -11,9 +11,9 @@ This project runs [GLM-OCR](https://huggingface.co/zai-org/GLM-OCR) (Z.ai’s mu
 | Item | Description |
 |------|-------------|
 | **`src/`** | Shared code: `generation_with_probs.py` (token-probability helpers used by PDF scripts when `--show-probs` is set). |
-| **`scripts/`** | Exploratory/test scripts: `test_single_pdf.py`, `test_batch_pdf.py`, `test_single_image.py`. Run from project root (e.g. `python scripts/test_single_pdf.py`). |
-| **`finetuning/`** | Pipeline for fine-tuning: `data_prep/`, `labels/`, `train/`, `output/` (for rendered images and gold labels). |
-| **`inference/`** | Mass inference (to be added after fine-tuning). |
+| **`scripts/`** | Exploratory and utility scripts: `test_single_pdf.py`, `test_batch_pdf.py`, `test_single_image.py`, `pdf_to_images.py` (PDF → PNGs; full folder or `--num-pages` for data prep), `merge_adapter.py` (merge PEFT adapter into base model, full precision). Run from project root (e.g. `python scripts/test_single_pdf.py`). |
+| **`finetuning/`** | Pipeline for fine-tuning: `data_prep/` (e.g. `split_train_test.py`), `labels/`, `train/`, `output/` (rendered images and gold labels). |
+| **`inference/`** | Finetuned-model inference: `run_ocr.py` (batch OCR to JSON, resume, checkpoint), `test_ocr_sample.py` (small sample with formatted output). |
 | **`requirements.txt`** | Python dependencies; includes notes for optional Flash Attention and `kernels`. |
 | **`data/`** | Directory for PDFs (e.g. drop files here; scripts can pick the first PDF under `data/` if no path is given). |
 
@@ -25,7 +25,7 @@ The model does **not** accept PDF bytes directly; it expects **images** (`pixel_
 
 | Folder | Purpose |
 |--------|--------|
-| **`finetuning/data_prep/`** | `pdf_to_images.py` samples PDFs, renders pages to images (named like `{stem}_page_0001.png`) in `output/`. `split_train_test.py` splits images into train (e.g. 1000) and test (e.g. 100) with `train.txt` / `test.txt`. |
+| **`finetuning/data_prep/`** | `split_train_test.py` splits images into train (e.g. 1000) and test (e.g. 100) with `train.txt` / `test.txt`. PDF → images is done by **`scripts/pdf_to_images.py`** (use `--output-dir finetuning/output` and optional `--num-pages`). |
 | **`finetuning/labels/`** | `test_gemini_ocr.py` tests Vertex AI Gemini OCR on one image (ADC). `label_all_vertex.py` labels all images (e.g. 1100) with Vertex AI Gemini, progress bar, retries, and writes `labels.json`. |
 | **`finetuning/train/`** | `train_unsloth.py` — Unsloth FastVisionModel + LoRA + UnslothVisionDataCollator; lazy dataset (images loaded on demand to avoid RAM OOM). `tokenize_labels.py` — tokenize `labels.json` and report max tokens per page. **Colab:** `colab_setup.md` (copy-paste cells) and `glm_ocr_colab.ipynb` (notebook to open in Google Colab). Both use `output/` (`train.txt`, `test.txt`, `labels.json`). |
 | **`finetuning/output/`** | Generated data: rendered images, `train.txt`, `test.txt`, `labels.json`; consumed by `train/`. Tracked in the repo. |
@@ -115,15 +115,44 @@ python scripts/test_single_image.py
 
 ---
 
+## Inference (finetuned Unsloth adapter)
+
+The inference scripts load **unsloth/GLM-OCR** as the base and a PEFT adapter (HuggingFace id or local path). Unsloth is imported before `transformers`/`peft` so optimizations apply. Generation stops at EOS (no truncation); `--max-new-tokens` is a safety cap (default 8192).
+
+- **Batch OCR to JSON** — `inference/run_ocr.py` runs the finetuned model on all PNGs in a directory, writes `results.json` (key = image path, value = text). Resume: skips images already in the file; checkpoints every 100 images. First run does a short warmup to trigger CUDA compilation.
+
+  ```bash
+  python inference/run_ocr.py --images-dir inference/21jhd/images --output inference/21jhd/results.json
+  python inference/run_ocr.py --model meloneneneis/glm_ocr_21jhd --batch-size 8 --limit 100
+  ```
+
+- **Sample test (formatted output)** — `inference/test_ocr_sample.py` runs OCR on a small number of images and prints each result in a readable block.
+
+  ```bash
+  python inference/test_ocr_sample.py --num 5 --images-dir inference/21jhd/images
+  ```
+
+- **Merge adapter into base** — `scripts/merge_adapter.py` merges the PEFT adapter into the base model (full precision, no 4-bit) and saves a single full model for deployment.
+
+  ```bash
+  python scripts/merge_adapter.py --adapter meloneneneis/glm_ocr_21jhd --output inference/merged_21jhd
+  ```
+
+---
+
 ## Finetuning pipeline (data prep → labels)
 
-1. **Render PDFs to images** (optional args: `--num-pdfs`, `--scale-factor`, `--seed`):
+1. **Render PDFs to images** — Use **`scripts/pdf_to_images.py`**. Without `--num-pages`, converts all PDFs in `--pdf-dir` to PNGs in `--output-dir`. With `--num-pages`, adds pages until the output dir has that many (for data prep).
 
    ```bash
-   python finetuning/data_prep/pdf_to_images.py --num-pdfs 100
+   # Full folder (e.g. for inference): all PDFs → inference/21jhd/images
+   python scripts/pdf_to_images.py --pdf-dir data/21Jhd --output-dir inference/21jhd/images --workers 8
+
+   # Data prep: cap at 10000 pages in finetuning/output (--seed for deterministic order)
+   python scripts/pdf_to_images.py --num-pages 10000 --output-dir finetuning/output --pdf-dir data/21Jhd --seed 42
    ```
 
-   Images are written to `finetuning/output/` as `{pdf_stem}_page_0001.png`, etc.
+   Images are named `{pdf_stem}_page_0001.png`, etc.
 
 2. **Split into train / test** (default 1000 train, 100 test):
 

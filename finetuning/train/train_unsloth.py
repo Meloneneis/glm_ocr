@@ -38,11 +38,13 @@ class LazyMessagesDataset:
     Dataset that loads images on demand in __getitem__ to avoid loading
     thousands of images into RAM at once (which causes OOM kill with large train_size).
     Returns Unsloth vision format: {"messages": [user with image+text, assistant with text]}.
+    Labels are plain text; we append eos_token (if given) so the model learns to output EOS at end of reply.
     """
 
-    def __init__(self, data_dir: Path, pairs: list):
+    def __init__(self, data_dir: Path, pairs: list, eos_token: str | None = None):
         self.data_dir = data_dir
         self.pairs = pairs
+        self.eos_token = eos_token
 
     def __len__(self):
         return len(self.pairs)
@@ -51,6 +53,7 @@ class LazyMessagesDataset:
         name, label = self.pairs[idx]
         path = self.data_dir / name
         image = Image.open(path).convert("RGB")
+        assistant_text = label + (self.eos_token if self.eos_token else "")
         messages = [
             {
                 "role": "user",
@@ -61,7 +64,7 @@ class LazyMessagesDataset:
             },
             {
                 "role": "assistant",
-                "content": [{"type": "text", "text": label}],
+                "content": [{"type": "text", "text": assistant_text}],
             },
         ]
         return {"messages": messages}
@@ -122,6 +125,11 @@ def main():
         max_seq_length=args.max_length,
     )
     tokenizer = getattr(processor, "tokenizer", processor)
+    eos_token = getattr(tokenizer, "eos_token", None)
+    if eos_token:
+        print(f"Appending EOS token to assistant responses: {repr(eos_token)}")
+    else:
+        print("Warning: tokenizer has no eos_token; generation may not stop at end of reply.")
 
     model = FastVisionModel.get_peft_model(
         model,
@@ -140,8 +148,8 @@ def main():
     FastVisionModel.for_training(model)
 
     # Lazy datasets: load images in __getitem__ to avoid OOM with large train_size (e.g. 8500).
-    train_data = LazyMessagesDataset(args.output_dir, train_list)
-    eval_data = LazyMessagesDataset(args.output_dir, test_list)
+    train_data = LazyMessagesDataset(args.output_dir, train_list, eos_token=eos_token)
+    eval_data = LazyMessagesDataset(args.output_dir, test_list, eos_token=eos_token)
 
     # GLM-OCR chat template: user yields "[gMASK]\n" + prompt + "\n", then add_generation_prompt adds "\n"; assistant starts with "\n".
     instruction_part = "[gMASK]\n" + PROMPT + "\n\n"
