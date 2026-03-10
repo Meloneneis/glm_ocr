@@ -66,7 +66,10 @@ def _load_model_and_processor(adapter_id_or_path: str, device: str = "cuda"):
         )
         model = PeftModel.from_pretrained(model, adapter_id_or_path, is_trainable=False)
         processor = AutoProcessor.from_pretrained(adapter_id_or_path, use_fast=False)
-        
+    # Decoder-only: left-padding for correct batched generation
+    tokenizer = getattr(processor, "tokenizer", processor)
+    if hasattr(tokenizer, "padding_side"):
+        tokenizer.padding_side = "left"
     # Move model to the specified device
     model.to(device)
     FastVisionModel.for_inference(model)
