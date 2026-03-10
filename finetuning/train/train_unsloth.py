@@ -100,6 +100,13 @@ def main():
     parser.add_argument("--no-cer", action="store_true", help="Disable CER computation after each evaluation (saves VRAM).")
     parser.add_argument("--cer-samples", type=int, default=10, help="Number of test samples used for CER after each eval. Lower (e.g. 5 or 3) if OOM occurs after evaluation.")
     parser.add_argument("--cer-max-new-tokens", type=int, default=512, help="Max new tokens for CER generation. Lower (e.g. 256 or 128) to reduce VRAM during CER.")
+    parser.add_argument(
+        "--resume-from-checkpoint",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Resume training from a checkpoint dir (e.g. finetuning/train/out_unsloth/checkpoint-500). Model, optimizer state and step are restored.",
+    )
     args = parser.parse_args()
 
     train_txt = args.output_dir / "train.txt"
@@ -124,41 +131,62 @@ def main():
     from trl import SFTConfig, SFTTrainer
     from transformers import TrainerCallback
 
-    model_id = args.model
-    if not model_id.startswith(("unsloth/", "hf://", "http")) and not Path(model_id).is_absolute():
-        # Resolve relative path from project root (e.g. merged_21jhd -> project_root/merged_21jhd)
-        resolved = (_PROJECT_ROOT / model_id).resolve()
-        if resolved.is_dir():
-            model_id = str(resolved)
-    print(f"Loading model: {model_id}")
-    model, processor = FastVisionModel.from_pretrained(
-        model_id,
-        load_in_4bit=args.load_in_4bit,
-        use_gradient_checkpointing="unsloth",
-        max_seq_length=args.max_length,
-    )
+    resume_from_checkpoint = None
+    if args.resume_from_checkpoint is not None:
+        resume_from_checkpoint = args.resume_from_checkpoint
+        if not resume_from_checkpoint.is_absolute():
+            resume_from_checkpoint = (_PROJECT_ROOT / resume_from_checkpoint).resolve()
+        if not resume_from_checkpoint.is_dir():
+            print(f"Checkpoint path is not a directory: {resume_from_checkpoint}", file=sys.stderr)
+            sys.exit(1)
+        resume_from_checkpoint = str(resume_from_checkpoint)
+        print(f"Resuming from checkpoint: {resume_from_checkpoint}")
+
+    if resume_from_checkpoint:
+        # Load model and processor from checkpoint (already has adapter weights)
+        model, processor = FastVisionModel.from_pretrained(
+            resume_from_checkpoint,
+            load_in_4bit=args.load_in_4bit,
+            use_gradient_checkpointing="unsloth",
+            max_seq_length=args.max_length,
+        )
+        FastVisionModel.for_training(model)
+    else:
+        model_id = args.model
+        if not model_id.startswith(("unsloth/", "hf://", "http")) and not Path(model_id).is_absolute():
+            # Resolve relative path from project root (e.g. merged_21jhd -> project_root/merged_21jhd)
+            resolved = (_PROJECT_ROOT / model_id).resolve()
+            if resolved.is_dir():
+                model_id = str(resolved)
+        print(f"Loading model: {model_id}")
+        model, processor = FastVisionModel.from_pretrained(
+            model_id,
+            load_in_4bit=args.load_in_4bit,
+            use_gradient_checkpointing="unsloth",
+            max_seq_length=args.max_length,
+        )
+        model = FastVisionModel.get_peft_model(
+            model,
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            bias="none",
+            random_state=args.seed,
+            finetune_vision_layers=True,
+            finetune_language_layers=True,
+            finetune_attention_modules=True,
+            finetune_mlp_modules=False,
+            use_rslora=False,
+            target_modules="all-linear",
+        )
+        FastVisionModel.for_training(model)
+
     tokenizer = getattr(processor, "tokenizer", processor)
     eos_token = getattr(tokenizer, "eos_token", None)
     if eos_token:
         print(f"Appending EOS token to assistant responses: {repr(eos_token)}")
     else:
         print("Warning: tokenizer has no eos_token; generation may not stop at end of reply.")
-
-    model = FastVisionModel.get_peft_model(
-        model,
-        r=args.lora_r,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=args.lora_dropout,
-        bias="none",
-        random_state=args.seed,
-        finetune_vision_layers=True,
-        finetune_language_layers=True,
-        finetune_attention_modules=True,
-        finetune_mlp_modules=False,
-        use_rslora=False,
-        target_modules="all-linear",
-    )
-    FastVisionModel.for_training(model)
 
     # Lazy datasets: load images in __getitem__ to avoid OOM with large train_size (e.g. 8500).
     train_data = LazyMessagesDataset(args.output_dir, train_list, eos_token=eos_token)
@@ -179,7 +207,12 @@ def main():
         resize="min",
     )
 
-    save_dir = args.save_dir or (_PROJECT_ROOT / "finetuning" / "train" / "out_unsloth")
+    # When resuming, write checkpoints to the same run dir as the checkpoint
+    if resume_from_checkpoint:
+        save_dir = Path(resume_from_checkpoint).parent
+        print(f"Save dir (same as checkpoint run): {save_dir}")
+    else:
+        save_dir = args.save_dir or (_PROJECT_ROOT / "finetuning" / "train" / "out_unsloth")
     save_dir.mkdir(parents=True, exist_ok=True)
 
     # Validation on test set: after each epoch (default), or every --eval-steps if set.
@@ -361,11 +394,12 @@ def main():
         data_collator=data_collator,
         callbacks=callbacks,
     )
-    # Evaluation before training (baseline)
-    print("Running baseline evaluation before training...")
-    baseline_metrics = trainer.evaluate()
-    print("Baseline metrics:", baseline_metrics)
-    trainer.train()
+    # Evaluation before training (baseline), then train (resuming from checkpoint if set)
+    if not resume_from_checkpoint:
+        print("Running baseline evaluation before training...")
+        baseline_metrics = trainer.evaluate()
+        print("Baseline metrics:", baseline_metrics)
+    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     trainer.save_model(str(save_dir))
     processor.save_pretrained(save_dir)
     print(f"Saved adapter and processor to {save_dir}")
