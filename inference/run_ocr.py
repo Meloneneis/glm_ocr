@@ -133,11 +133,22 @@ def _run_ocr_batch(
     else:
         inputs = {k: v.to(model.device) if hasattr(v, "to") else v for k, v in inputs.items()}
     tokenizer = getattr(processor, "tokenizer", processor)
-    eos_token_id = getattr(tokenizer, "eos_token_id", None) or getattr(model.config, "eos_token_id", None)
+    # Use all EOS token IDs so generation stops on either <|endoftext|> or <|user|> (model often emits <|user|> after content).
+    # GLM-OCR has eos_token_id under config.text_config or in generation_config, not at config top level.
+    _eos = (
+        getattr(model.config, "eos_token_id", None)
+        or (getattr(model.config, "text_config", None) and getattr(model.config.text_config, "eos_token_id", None))
+        or (getattr(model, "generation_config", None) and getattr(model.generation_config, "eos_token_id", None))
+        or getattr(tokenizer, "eos_token_id", None)
+    )
+    if _eos is not None:
+        eos_token_ids = list(_eos) if isinstance(_eos, (list, tuple)) else [_eos]
+    else:
+        eos_token_ids = []
     pad_token_id = getattr(tokenizer, "pad_token_id", None) or getattr(model.config, "pad_token_id", None)
     gen_kwargs = {"max_new_tokens": max_new_tokens}
-    if eos_token_id is not None:
-        gen_kwargs["eos_token_id"] = eos_token_id
+    if eos_token_ids:
+        gen_kwargs["eos_token_id"] = eos_token_ids if len(eos_token_ids) > 1 else eos_token_ids[0]
     if pad_token_id is not None:
         gen_kwargs["pad_token_id"] = pad_token_id
     if with_probs:
@@ -150,7 +161,7 @@ def _run_ocr_batch(
     input_len = inputs["input_ids"].shape[1]
     # Release input tensors so GPU memory can be reused (inputs no longer needed)
     del inputs
-    eos_ids = [eos_token_id] if isinstance(eos_token_id, int) else (list(eos_token_id) if eos_token_id else [])
+    eos_ids = eos_token_ids
     truncated_mask = [False] * len(image_paths)
     for idx, i in enumerate(valid_indices):
         gen_tokens = sequences[idx, input_len:].tolist()
