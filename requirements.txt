@@ -22,3 +22,7 @@ google-genai>=0.8.0
 # Fine-tuning (Unsloth: train_unsloth.py)
 unsloth
 trl>=0.15.0
+
+
+language-tool-python
+pyspellchecker

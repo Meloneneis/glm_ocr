@@ -2,12 +2,13 @@
 Render PDF pages to PNG images. Single script for both data prep and inference.
 
 - If --num-pages is set: add pages until output-dir has that many PNGs (incremental; --seed for PDF order).
-- If --num-pages is not set: convert all PDFs in pdf-dir (incremental: skip PDFs that already have any image).
+- If --num-pages is not set: convert all PDFs in pdf-path (incremental: skip PDFs that already have any image).
 
 Output filenames: {pdf_stem}_page_0001.png, _page_0002.png, ...
 
 Run from project root:
   python scripts/pdf_to_images.py
+  python scripts/pdf_to_images.py --pdf-path data/21Jhd/single_doc.pdf --output-dir inference/21jhd/images
   python scripts/pdf_to_images.py --pdf-dir data/21Jhd --output-dir inference/21jhd/images --workers 8
   python scripts/pdf_to_images.py --num-pages 10000 --output-dir finetuning/output --seed 42
 """
@@ -64,13 +65,14 @@ def _convert_one_pdf(args_tuple):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Render PDF pages to PNGs. Full folder by default; use --num-pages to cap (e.g. for data prep).",
+        description="Render PDF pages to PNGs. Full folder or single file; use --num-pages to cap (e.g. for data prep).",
     )
     parser.add_argument(
-        "--pdf-dir",
+        "--pdf-path", "--pdf-dir",
+        dest="pdf_path",
         type=Path,
         default=_PROJECT_ROOT / "data" / "21Jhd",
-        help="Directory to search for PDFs (default: data/21Jhd).",
+        help="Directory to search for PDFs, or path to a single PDF (default: data/21Jhd).",
     )
     parser.add_argument(
         "--output-dir",
@@ -108,8 +110,8 @@ def main():
     )
     args = parser.parse_args()
 
-    if not args.pdf_dir.is_dir():
-        print(f"PDF directory not found: {args.pdf_dir}", file=sys.stderr)
+    if not args.pdf_path.exists():
+        print(f"PDF path not found: {args.pdf_path}", file=sys.stderr)
         sys.exit(1)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -118,9 +120,17 @@ def main():
     existing_count = len(existing_pngs)
     stems_done = {_pdf_stem_from_png_path(p) for p in existing_pngs}
 
-    pdfs_all = sorted(args.pdf_dir.rglob("*.pdf"))
+    # Handle single file vs directory
+    if args.pdf_path.is_file():
+        if args.pdf_path.suffix.lower() != ".pdf":
+            print(f"Provided file is not a PDF: {args.pdf_path}", file=sys.stderr)
+            sys.exit(1)
+        pdfs_all = [args.pdf_path]
+    else:
+        pdfs_all = sorted(args.pdf_path.rglob("*.pdf"))
+
     if not pdfs_all:
-        print("No PDFs found under pdf-dir.", file=sys.stderr)
+        print("No PDFs found at the specified path.", file=sys.stderr)
         sys.exit(1)
 
     seen_stems = set()
@@ -164,7 +174,7 @@ def main():
         total_now = existing_count + added_pages
         print(f"Done: added {added_pages} pages from {converted_pdfs} PDFs. Total in {args.output_dir}: {total_now} PNGs.")
     else:
-        # Full folder: convert all todo PDFs in parallel
+        # Full folder/file: convert all todo PDFs in parallel
         workers = max(1, args.workers)
         print(f"Converting {len(pdfs_todo)} PDFs (workers={workers}) -> {args.output_dir}")
         task_tuples = [

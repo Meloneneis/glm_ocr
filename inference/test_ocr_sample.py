@@ -70,6 +70,12 @@ def main():
         action="store_true",
         help="Compute and show per-token probabilities (for confidence/QC).",
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda",
+        help="Device to run the model on (e.g., 'cuda', 'cuda:0', 'cpu'). Default is 'cuda'.",
+    )
     args = parser.parse_args()
 
     if args.image is not None:
@@ -100,26 +106,31 @@ def main():
     print(f"  batch_size:      {batch_size}")
     print(f"  max_new_tokens:  {args.max_new_tokens}")
     print(f"  raw:             {args.raw}")
-    print(f"  with_probs:     {args.with_probs}")
+    print(f"  with_probs:      {args.with_probs}")
+    print(f"  device:          {args.device}")
     print(f"  images to run:   {len(image_paths)}")
     print()
 
-    print(f"Loading model and processor (model: {args.model})...")
-    model, processor = run_ocr._load_model_and_processor(args.model)
+    print(f"Loading model and processor (model: {args.model}) on device {args.device}...")
+    model, processor = run_ocr._load_model_and_processor(args.model, device=args.device)
     print(f"Running OCR on {len(image_paths)} image(s) (batch_size={batch_size})...\n")
 
     t0 = time.perf_counter()
     texts = []
     token_probs_list = []
+    prob_infos_list = []
     for start in range(0, len(image_paths), batch_size):
         batch_paths = image_paths[start : start + batch_size]
-        batch_texts, _, batch_probs = run_ocr._run_ocr_batch(
-            processor, model, batch_paths, args.max_new_tokens, raw=args.raw, with_probs=args.with_probs
+        batch_texts, _, batch_probs, batch_prob_infos = run_ocr._run_ocr_batch(
+            processor, model, batch_paths, args.max_new_tokens, raw=args.raw, with_probs=args.with_probs, device=args.device
         )
         texts.extend(batch_texts)
         if batch_probs:
             for i in range(len(batch_paths)):
                 token_probs_list.append(batch_probs[i] if batch_probs[i] is not None else [])
+        if batch_prob_infos:
+            for i in range(len(batch_paths)):
+                prob_infos_list.append(batch_prob_infos[i] if batch_prob_infos[i] is not None else {})
     elapsed = time.perf_counter() - t0
     n = len(image_paths)
     print(f"OCR run time: {elapsed:.2f} s  |  Time per image: {elapsed / n:.2f} s\n")
@@ -145,6 +156,15 @@ def main():
                 print(f"  {line_no:4d}| {line}")
         if args.with_probs and img_idx < len(token_probs_list) and token_probs_list[img_idx]:
             probs = token_probs_list[img_idx]
+            
+            # Show Probability Statistics
+            if img_idx < len(prob_infos_list) and prob_infos_list[img_idx]:
+                info = prob_infos_list[img_idx]
+                print(f"\n  Token Probability Stats:")
+                print(f"    Mean:   {info.get('mean', 0.0):.4f}")
+                print(f"    Median: {info.get('median', 0.0):.4f}")
+                print(f"    StDev:  {info.get('stdev', 0.0):.4f}")
+
             # Top 10 lowest with 5-token context
             lowest = sorted(enumerate(probs), key=lambda x: x[1][1])[:10]
             show_n = len(lowest)

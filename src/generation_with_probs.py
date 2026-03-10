@@ -8,8 +8,9 @@ token at each step.
 """
 from __future__ import annotations
 
+import statistics
 import torch
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 
 # Type alias for ordered (token_str, probability) per sequence
 TokenProbPairs = List[Tuple[str, float]]
@@ -129,19 +130,20 @@ def run_ocr_batch_with_probs(
     images: list,
     prompt: str = "Text Recognition:",
     max_new_tokens: int = 1024,
-) -> Tuple[List[str], List[TokenProbPairs]]:
+) -> Tuple[List[str], List[TokenProbPairs], List[Dict[str, float]]]:
     """
     Run GLM-OCR on a batch of PIL images and return decoded texts plus
-    ordered per-token (token_str, probability) pairs for each image.
+    ordered per-token (token_str, probability) pairs for each image, along with stats.
 
     Returns:
         texts: list of cleaned OCR strings (one per image).
         token_probs_per_image: list of ordered lists; token_probs_per_image[i] is
             a list of (token_str, probability) tuples for the i-th image, in
             generation order (every output token with its probability).
+        prob_infos: list of dictionaries containing mean, median, and stdev for each image.
     """
     if not images:
-        return [], []
+        return [], [], []
 
     messages = [
         [
@@ -187,6 +189,18 @@ def run_ocr_batch_with_probs(
         for b in range(sequences.shape[0])
     ]
 
+    # Calculate token probability statistics per sequence
+    prob_infos: List[Dict[str, float]] = []
+    for pairs in token_probs_ordered:
+        if not pairs:
+            prob_infos.append({"mean": 0.0, "median": 0.0, "stdev": 0.0})
+            continue
+        probs_only = [p for _, p in pairs]
+        mean_p = statistics.mean(probs_only)
+        median_p = statistics.median(probs_only)
+        stdev_p = statistics.stdev(probs_only) if len(probs_only) > 1 else 0.0
+        prob_infos.append({"mean": mean_p, "median": median_p, "stdev": stdev_p})
+
     decoded = processor.batch_decode(sequences, skip_special_tokens=True)
     # TokenizersBackend does not strip <think>/</think>/<|image|> despite skip_special_tokens=True; strip in post.
     def _clean(s: str) -> str:
@@ -195,4 +209,4 @@ def run_ocr_batch_with_probs(
         return s.replace("<think>", "").replace("</think>", "").replace("<|image|>", "").strip() or ""
     texts = [_clean(s) for s in decoded]
 
-    return texts, token_probs_ordered
+    return texts, token_probs_ordered, prob_infos

@@ -1,6 +1,6 @@
 """
 Run finetuned GLM-OCR on all images in a directory; save results to JSONL (one line per image).
-Each line: {"path": "<rel_path>", "text": "...", "truncated": bool, "token_probs": [...] (if --with-probs)}.
+Each line: {"path": "<rel_path>", "text": "...", "truncated": bool, "token_probs": [...], "prob_info": {...} (if --with-probs)}.
 Resume: skips images already in output JSONL (streams file to build done set). Appends after every batch.
 
 Run from project root:
@@ -11,8 +11,9 @@ import argparse
 import gc
 import json
 import sys
+import statistics
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 
 # Unsloth must be imported before transformers/peft for optimizations
 from unsloth import FastVisionModel
@@ -45,7 +46,7 @@ def _is_merged_model_path(path: Path) -> bool:
     )
 
 
-def _load_model_and_processor(adapter_id_or_path: str):
+def _load_model_and_processor(adapter_id_or_path: str, device: str = "cuda"):
     """Load model and processor. Accepts (1) merged model path (local dir with no adapter_config.json) or (2) PEFT adapter (Hub id or local path)."""
     path = Path(adapter_id_or_path).resolve()
     if _is_merged_model_path(path):
@@ -65,7 +66,9 @@ def _load_model_and_processor(adapter_id_or_path: str):
         )
         model = PeftModel.from_pretrained(model, adapter_id_or_path, is_trainable=False)
         processor = AutoProcessor.from_pretrained(adapter_id_or_path, use_fast=False)
-    model.to(model.device)
+        
+    # Move model to the specified device
+    model.to(device)
     FastVisionModel.for_inference(model)
     return model, processor
 
@@ -85,10 +88,11 @@ def _run_ocr_batch(
     max_new_tokens: int,
     raw: bool = False,
     with_probs: bool = False,
-) -> Tuple[List[str], List[bool], Optional[List[Optional[List[List]]]]]:
-    """Run OCR on a batch of images; return (texts, truncated_mask, token_probs_or_none). truncated_mask[i]=True if no EOS. If with_probs, token_probs_or_none[i] is list of [token_str, prob] for JSON."""
+    device: str = "cuda"
+) -> Tuple[List[str], List[bool], Optional[List[Optional[List[List]]]], Optional[List[Optional[Dict[str, float]]]]]:
+    """Run OCR on a batch of images; return (texts, truncated_mask, token_probs_or_none, prob_infos_or_none). truncated_mask[i]=True if no EOS. If with_probs, token_probs_or_none[i] is list of [token_str, prob] for JSON."""
     if not image_paths:
-        return [], [], None
+        return [], [], None, None
     images = []
     for p in image_paths:
         try:
@@ -98,7 +102,7 @@ def _run_ocr_batch(
             images.append(None)
     valid_indices = [i for i, im in enumerate(images) if im is not None]
     if not valid_indices:
-        return [""] * len(image_paths), [False] * len(image_paths), None
+        return [""] * len(image_paths), [False] * len(image_paths), None, None
     valid_images = [images[i] for i in valid_indices]
     messages = [
         [
@@ -129,9 +133,9 @@ def _run_ocr_batch(
                 pass
     del images, messages, valid_images
     if hasattr(inputs, "to"):
-        inputs = inputs.to(model.device)
+        inputs = inputs.to(device)
     else:
-        inputs = {k: v.to(model.device) if hasattr(v, "to") else v for k, v in inputs.items()}
+        inputs = {k: v.to(device) if hasattr(v, "to") else v for k, v in inputs.items()}
     tokenizer = getattr(processor, "tokenizer", processor)
     # Use all EOS token IDs so generation stops on either <|endoftext|> or <|user|> (model often emits <|user|> after content).
     # GLM-OCR has eos_token_id under config.text_config or in generation_config, not at config top level.
@@ -177,20 +181,33 @@ def _run_ocr_batch(
         result[i] = texts[idx]
 
     token_probs_result = None
+    prob_infos_result = None
     if with_probs and scores:
         eos_for_stop = eos_ids[0] if eos_ids else None
         token_probs_per_batch = _scores_to_token_probs(sequences, scores, input_len, eos_for_stop)
         token_probs_result = [None] * len(image_paths)
+        prob_infos_result = [None] * len(image_paths)
         for idx, i in enumerate(valid_indices):
             pairs = _token_probs_to_ordered_pairs(
                 sequences[idx, input_len:], token_probs_per_batch[idx], tokenizer
             )
             token_probs_result[i] = [[s, round(p, 6)] for s, p in pairs]
+            
+            # Calculate and store statistics
+            if not pairs:
+                prob_infos_result[i] = {"mean": 0.0, "median": 0.0, "stdev": 0.0}
+            else:
+                probs_only = [p for _, p in pairs]
+                mean_p = statistics.mean(probs_only)
+                median_p = statistics.median(probs_only)
+                stdev_p = statistics.stdev(probs_only) if len(probs_only) > 1 else 0.0
+                prob_infos_result[i] = {"mean": mean_p, "median": median_p, "stdev": stdev_p}
+
         # Release large GPU tensors so memory can be freed (avoid per-batch gc/empty_cache here; done periodically in main loop)
         del out, scores, sequences
     else:
         del out, sequences
-    return result, truncated_mask, token_probs_result
+    return result, truncated_mask, token_probs_result, prob_infos_result
 
 
 def main():
@@ -244,6 +261,12 @@ def main():
         default=5,
         metavar="N",
         help="Run gc + CUDA empty_cache every N batches to limit memory growth (default: 5). Use 0 to disable, 1 every batch (slower).",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda",
+        help="Device to run the model on (e.g., 'cuda', 'cuda:0', 'cpu'). Default is 'cuda'.",
     )
     args = parser.parse_args()
 
@@ -321,7 +344,7 @@ def main():
             for batch_idx, start in enumerate(range(0, len(todo), batch_size)):
                 batch_paths = todo[start : start + batch_size]
                 try:
-                    texts, batch_truncated, batch_probs = _run_ocr_batch(
+                    texts, batch_truncated, batch_probs, batch_prob_infos = _run_ocr_batch(
                         processor, model, batch_paths, args.max_new_tokens, with_probs=args.with_probs
                     )
                     for i, (path, text, truncated) in enumerate(zip(batch_paths, texts, batch_truncated)):
@@ -331,10 +354,12 @@ def main():
                         line_obj = {"path": key, "text": text, "truncated": truncated}
                         if args.with_probs and batch_probs and batch_probs[i] is not None:
                             line_obj["token_probs"] = batch_probs[i]
+                            if batch_prob_infos and batch_prob_infos[i] is not None:
+                                line_obj["prob_info"] = batch_prob_infos[i]
                         out_file.write(json.dumps(line_obj, ensure_ascii=False) + "\n")
                         total_written += 1
                     # Drop references to batch results so GC can free large token_probs lists
-                    del texts, batch_truncated, batch_probs
+                    del texts, batch_truncated, batch_probs, batch_prob_infos
                 except Exception as e:
                     print(f"\nError on batch at {start}: {e}", file=sys.stderr)
                     for path in batch_paths:
@@ -342,6 +367,7 @@ def main():
                         line_obj = {"path": key, "text": "", "truncated": False}
                         if args.with_probs:
                             line_obj["token_probs"] = []
+                            line_obj["prob_info"] = {}
                         out_file.write(json.dumps(line_obj, ensure_ascii=False) + "\n")
                         total_written += 1
                 pbar.update(len(batch_paths))
